@@ -22,7 +22,7 @@ the per-stage breakdown.
 | Stage | Concept                              | Status |
 | ----- | ------------------------------------ | ------ |
 | 0     | Scaffold + `RlweParams`              | done   |
-| 1     | Ring arithmetic `R_q`                | todo   |
+| 1     | Ring arithmetic `R_q`                | done   |
 | 2     | Galois automorphisms `tau_g, tau_h`  | todo   |
 | 3     | Lemma 1: trace `Tr(p) = d * c_0`     | todo   |
 | 4     | LWE                                  | todo   |

@@ -257,10 +257,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -289,8 +287,8 @@ dependencies = [
  "rand_chacha",
  "serde_json",
  "sha2",
- "spiral-rs",
  "thiserror",
+ "valar-spiral-rs",
 ]
 
 [[package]]
@@ -580,20 +578,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
-name = "spiral-rs"
-version = "0.3.0"
-source = "git+https://github.com/menonsamir/spiral-rs.git?rev=6929441c6551769b7d099d3af3df347cde3bae7b#6929441c6551769b7d099d3af3df347cde3bae7b"
-dependencies = [
- "fastrand",
- "getrandom",
- "rand",
- "rand_chacha",
- "serde_json",
- "sha2",
- "subtle",
-]
-
-[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -651,6 +635,20 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "valar-spiral-rs"
+version = "0.5.2"
+source = "git+https://github.com/valargroup/spiral-rs.git?rev=6f5b66c6a5a639827c6486c59d31c7ec2d4399a8#6f5b66c6a5a639827c6486c59d31c7ec2d4399a8"
+dependencies = [
+ "fastrand",
+ "getrandom",
+ "rand",
+ "rand_chacha",
+ "serde_json",
+ "sha2",
+ "subtle",
+]
 
 [[package]]
 name = "version_check"

@@ -52,8 +52,8 @@ Before using any other parameters, verify:
 - `KS.Setup` is offline key-generation code and consumes secret-key material.
   The online `pack(b, pre)` path is deterministic and consumes public
   preprocessed key material plus LWE `b` scalars.
-- The crate requires AVX-512 at build/runtime because of correctness constraints
-  in the pinned `spiral-rs` revision. See `docs/spiral-rs-mapping.md`.
+- The crate inherits its low-level polynomial arithmetic from the pinned
+  Valar `spiral-rs` fork. See `docs/spiral-rs-mapping.md`.
 
 ## Reporting
 

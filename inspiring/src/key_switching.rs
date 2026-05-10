@@ -336,18 +336,15 @@ mod tests {
             .collect()
     }
 
-    // ---- regression test for the upstream `spiral-rs` scalar bug --------
+    // ---- regression test for spiral-rs scalar multiply correctness ------
 
-    /// **Regression guard for the spiral-rs `multiply_add_modular` bug**.
+    /// **Regression guard for spiral-rs `multiply_add_modular` correctness**.
     ///
-    /// The crate's AVX-512 gate (see `src/lib.rs`) exists *because* the
-    /// scalar `multiply` fallback in our pinned `spiral-rs` revision drops
-    /// the accumulator on `crt_count == 1`, collapsing `[1 × ℓ] · [ℓ × 1]`
-    /// products to "last term only". This test multiplies a `[1 × 3]` by a
-    /// `[3 × 1]` matrix where every inner term is non-zero, with a known
-    /// reference computed in `u128` outside spiral-rs. If anyone ever
-    /// removes the AVX-512 gate or drops back to the scalar fallback path,
-    /// this test fails with an obvious "expected SUM, got LAST" mismatch.
+    /// The old upstream revision dropped the accumulator on `crt_count == 1`,
+    /// collapsing `[1 × ℓ] · [ℓ × 1]` products to "last term only". Valar's
+    /// fork fixes that scalar path; this test keeps the pin honest by
+    /// multiplying a `[1 × 3]` by a `[3 × 1]` matrix where every inner term is
+    /// non-zero, with a known reference computed in `u128` outside spiral-rs.
     #[test]
     fn spiral_matrix_multiply_accumulates_along_inner_dim() {
         let params = params();
@@ -387,8 +384,7 @@ mod tests {
         assert_eq!(
             prod_raw.get_poly(0, 0).to_vec(),
             expected,
-            "spiral-rs multiply lost the accumulator — AVX-512 gate has been bypassed; \
-             see src/lib.rs and docs/spiral-rs-mapping.md §1"
+            "spiral-rs multiply lost the accumulator; see docs/spiral-rs-mapping.md §1"
         );
     }
 

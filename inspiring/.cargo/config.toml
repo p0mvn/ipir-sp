@@ -1,20 +1,5 @@
 # InspiRING.Pack build configuration.
 #
-# AVX-512 is a *correctness* requirement, not just a performance preference.
-# See the compile-time gate in `src/lib.rs` and the upstream-bug analysis in
-# `docs/spiral-rs-mapping.md` §1 for the full rationale; in short, the only
-# scalar fallback in `spiral-rs` v0.3.0 (rev 6929441) silently miscomputes
-# matrix multiplies for `crt_count == 1`, which is the regime InspiRING runs
-# in. Compiling without AVX-512 would produce broken (zero-product) ciphertexts
-# at runtime — the gate in `lib.rs` makes that a build error instead.
-#
-# `skylake-avx512` is the lowest CPU level that turns on every `target_feature`
-# spiral-rs's NTT inner loops want (`avx2`, `avx512f`, `avx512dq`, …). Devs on
-# newer AVX-512 cores can override locally with
-# `RUSTFLAGS="-C target-cpu=native"`.
-[build]
-rustflags = ["-C", "target-cpu=skylake-avx512"]
-# `cargo test --doc` invokes rustdoc to build its test binaries, and rustdoc
-# does NOT inherit `[build] rustflags` automatically — it has its own flags
-# vector. Mirror the target-cpu here so doctests respect the same gate.
-rustdocflags = ["-C", "target-cpu=skylake-avx512"]
+# Valar's spiral-rs fork fixes the old single-CRT scalar multiply bug and
+# provides a non-AVX-512 NTT path, so this crate no longer forces a target CPU.
+# Keep this file as the place for future crate-local cargo settings.

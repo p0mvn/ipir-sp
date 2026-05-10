@@ -73,7 +73,7 @@ oracle-clean: ## Remove Python oracle build/test artifacts
 
 # ---- Rust crate (this directory) ----
 #
-# Requires nightly Rust + AVX-512 (see README.md and docs/spiral-rs-mapping.md).
+# Requires the stable Rust toolchain pinned in rust-toolchain.toml.
 # rustup auto-installs the right toolchain via rust-toolchain.toml.
 
 crate-fmt: ## cargo fmt the Rust crate

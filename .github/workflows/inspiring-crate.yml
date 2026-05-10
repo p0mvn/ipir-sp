@@ -31,13 +31,8 @@ on:
       - "inspiring/SECURITY.md"
 
 jobs:
-  build:
-    name: Build, lint, and test
-    # spiral-rs (rev 6929441) requires AVX-512 (see docs/spiral-rs-mapping.md).
-    # GitHub-hosted ubuntu-latest runners use Skylake-AVX-512 / Cascade-Lake CPUs
-    # which support the AVX-512 baseline. If GitHub ever migrates ubuntu-latest
-    # to non-AVX-512 hardware we will need to switch to a self-hosted runner;
-    # this comment documents that risk so future maintainers can find it.
+  portable:
+    name: Portable compile checks
     runs-on: ubuntu-latest
 
     defaults:
@@ -45,10 +40,6 @@ jobs:
         working-directory: inspiring
 
     env:
-      # Match spiral-rs's expected build profile. We pin a concrete CPU rather
-      # than rely on `target-cpu=native` so CI builds are reproducible across
-      # GitHub runner generations.
-      RUSTFLAGS: "-C target-cpu=skylake-avx512"
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
 
@@ -56,20 +47,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Verify CPU has AVX-512
-        run: |
-          if ! grep -q avx512f /proc/cpuinfo; then
-            echo "::error::This runner lacks AVX-512; spiral-rs will not build."
-            exit 1
-          fi
-          echo "AVX-512 detected on $(uname -m)"
-
       - name: Install Rust toolchain via rust-toolchain.toml
         # Setting up rustup such that `cargo` invocations honour
         # rust-toolchain.toml automatically.
         run: |
-          rustup show active-toolchain || rustup toolchain install --profile minimal nightly-2025-03-15
-          rustup component add rustfmt clippy --toolchain nightly-2025-03-15
+          rustup show active-toolchain || rustup toolchain install --profile minimal 1.89.0
+          rustup component add rustfmt clippy --toolchain 1.89.0
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -86,21 +69,64 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: cargo check
-        run: cargo check --all-targets --all-features
-
-      - name: cargo test
-        run: cargo test --all-features --no-fail-fast
-
       - name: cargo doc
         # Build docs to catch broken intra-doc links early. `--no-deps` so we
         # don't try to docgen spiral-rs.
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo check
+        run: cargo check --all-targets --all-features
+
+  tests:
+    name: Tests and benches
+    runs-on: [self-hosted, Linux, X64, avx512]
+
+    defaults:
+      run:
+        working-directory: inspiring
+
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify CPU has AVX-512
+        run: |
+          if ! grep -q avx512f /proc/cpuinfo; then
+            echo "::error::This runner lacks AVX-512; spiral-rs tests cannot run."
+            exit 1
+          fi
+          echo "AVX-512 detected on $(uname -m)"
+
+      - name: Install Rust toolchain via rust-toolchain.toml
+        # Setting up rustup such that `cargo` invocations honour
+        # rust-toolchain.toml automatically.
+        run: |
+          rustup show active-toolchain || rustup toolchain install --profile minimal 1.89.0
+          rustup component add rustfmt clippy --toolchain 1.89.0
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            inspiring/target/
+          key: ${{ runner.os }}-cargo-inspiring-tests-${{ hashFiles('inspiring/Cargo.lock', 'inspiring/Cargo.toml', 'inspiring/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-inspiring-tests-
+
+      - name: cargo test
+        run: cargo test --all-features --no-fail-fast
 
       - name: cargo bench --no-run
         run: cargo bench --bench pack --no-run

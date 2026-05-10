@@ -15,11 +15,10 @@ categories = ["cryptography"]
 # benches and noise tests are part of the contract).
 
 [dependencies]
-# spiral-rs is pinned to the revision matching the reference Google InspiRING
-# implementation. See ../docs/spiral-rs-mapping.md for the full audit. This
-# revision requires nightly Rust and AVX-512 (see rust-toolchain.toml and
-# README.md).
-spiral-rs = { git = "https://github.com/menonsamir/spiral-rs.git", rev = "6929441c6551769b7d099d3af3df347cde3bae7b" }
+# spiral-rs is pinned to Valar's fork so `inspiring` inherits the single-CRT
+# accumulator fix and the non-AVX-512 NTT path. See
+# ../docs/spiral-rs-mapping.md for the full audit.
+spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", rev = "6f5b66c6a5a639827c6486c59d31c7ec2d4399a8" }
 
 # Deterministic PRNG. spiral-rs already pulls in rand_chacha 0.3 transitively,
 # but we list it explicitly to make our own use a first-class dependency.

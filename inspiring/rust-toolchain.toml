@@ -1,12 +1,7 @@
-# spiral-rs rev 6929441 uses `#![feature(stdarch_x86_avx512)]` (nightly-only)
-# and AVX-512 intrinsics. We pin a specific nightly so the build is
-# reproducible. See docs/spiral-rs-mapping.md §1 for the full constraint list.
-#
-# This nightly was the latest available at the time the InspiRING reference
-# Google impl shipped; bumping it requires re-running `cargo build -p
-# spiral-rs` end-to-end and confirming nothing in `feature(stdarch_x86_avx512)`
-# has churned.
+# Valar's spiral-rs fork builds on stable Rust and no longer requires the old
+# `stdarch_x86_avx512` nightly feature gate. Pin a stable toolchain so local
+# and CI builds resolve the same compiler series.
 [toolchain]
-channel = "nightly-2025-03-15"
+channel = "1.89.0"
 components = ["rustfmt", "clippy"]
 targets = ["x86_64-unknown-linux-gnu"]

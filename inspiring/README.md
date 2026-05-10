@@ -16,9 +16,9 @@ pub fn pack<'a>(b: &LweBatch, pre: &'a PackPreprocessed<'a>)
 
 which compresses `d` LWE ciphertexts (each of LWE dim `d`) into a single RLWE
 ciphertext of degree `d`, using exactly **two** key-switching matrices
-`K_g` and `K_h`. Built on
-[`spiral-rs`](https://github.com/menonsamir/spiral-rs) pinned to
-`rev = 6929441` (matching the reference Google implementation).
+`K_g` and `K_h`. Built on Valar's
+[`spiral-rs`](https://github.com/valargroup/spiral-rs) fork pinned to
+`rev = 6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`.
 
 ## Status
 
@@ -54,24 +54,15 @@ spiral-rs primitive audit.
 
 ## Toolchain & platform requirements
 
-`spiral-rs` at the pinned revision uses
-`#![feature(stdarch_x86_avx512)]` and AVX-512 intrinsics. Therefore
-`inspiring` inherits these constraints:
+Valar's `spiral-rs` fork removes the old nightly feature gate and the
+AVX-512-only correctness requirement:
 
-- **Nightly Rust**: pinned by [`rust-toolchain.toml`](rust-toolchain.toml)
-  to `nightly-2025-03-15`. `rustup` will install the right toolchain when
-  you `cd inspiring && cargo build`.
-- **AVX-512 host**: `x86_64-unknown-linux-gnu` (CI) or any x86 host with
-  AVX-512 (Zen 4, Tiger Lake, Sapphire Rapids, etc.). The crate does
-  **not** build on `aarch64-*` because spiral-rs imports
-  `std::arch::x86_64::*` unconditionally in `ntt.rs`.
-- **`target-cpu` selection**: spiral-rs's NTT inner loops want AVX-512.
-  CI sets `RUSTFLAGS=-C target-cpu=skylake-avx512` explicitly so builds
-  are reproducible across runner generations. Local devs on AVX-512
-  hardware can do the same via `RUSTFLAGS` or a per-user
-  `~/.cargo/config.toml`. We deliberately do **not** ship a crate-level
-  `.cargo/config.toml` because it interferes with cross-compilation
-  workarounds for non-x86 dev hosts (see "Apple Silicon devs" below).
+- **Stable Rust**: pinned by [`rust-toolchain.toml`](rust-toolchain.toml)
+  to `1.89.0`. `rustup` will install the right toolchain when you
+  `cd inspiring && cargo build`.
+- **CPU target**: no crate-level `target-cpu` override is required. The fork
+  keeps the scalar single-CRT multiply path correct and provides a non-AVX-512
+  NTT path.
 
 See [`docs/spiral-rs-mapping.md` §1](docs/spiral-rs-mapping.md#1-toolchain-constraints-inherited-from-spiral-rs)
 for the full constraint list.
@@ -110,7 +101,7 @@ inspiring/
 
 ## Build
 
-On a Linux x86_64 + AVX-512 host:
+On a supported Rust host:
 
 ```bash
 cd inspiring
@@ -138,22 +129,18 @@ cargo install cargo-fuzz
 cargo fuzz run pack_no_panic
 ```
 
-### Apple Silicon devs
+### Non-x86 devs
 
-`spiral-rs` (rev 6929441) imports `std::arch::x86_64` unconditionally and so
-does not compile on `aarch64-apple-darwin`. To run `cargo check` locally on
-an Apple Silicon Mac, cross-compile to `x86_64-apple-darwin`:
+The Valar fork removes the x86_64-only AVX-512 dependency from the NTT path.
+If a target-specific issue appears, treat it as drift in the fork's portability
+surface and capture it in [`docs/spiral-rs-mapping.md`](docs/spiral-rs-mapping.md).
+
+To run a target-specific smoke check:
 
 ```bash
-rustup target add x86_64-apple-darwin --toolchain nightly-2025-03-15
 cd inspiring
-cargo check --target x86_64-apple-darwin
+cargo check --target <target-triple>
 ```
-
-This validates the build but does **not** run tests (the resulting binary
-needs an x86_64 macOS host to run; on Apple Silicon you can run the binary
-under Rosetta but the AVX-512 codepaths will not actually execute). For
-running tests, use CI or a Linux x86_64 + AVX-512 host.
 
 ### Python reference oracle
 

@@ -1,8 +1,10 @@
 # `spiral-rs` primitive inventory
 
-Phase 3 audit of [`menonsamir/spiral-rs`](https://github.com/menonsamir/spiral-rs)
-at the **pinned revision** `6929441c6551769b7d099d3af3df347cde3bae7b`
-(commit message *"Require AVX-512 (for now)"*).
+Phase 3 audit of Valar's [`spiral-rs`](https://github.com/valargroup/spiral-rs)
+fork at the **pinned revision** `6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`
+(`valar/avoid-avx512`). The fork's package is named `valar-spiral-rs`; the
+Cargo dependency is aliased as `spiral-rs` so Rust imports remain
+`spiral_rs::...`.
 
 This document maps every primitive `inspiring` needs to a concrete spiral-rs
 symbol or — when no suitable symbol exists — a wrapper we will add inside
@@ -18,17 +20,19 @@ document. New wrappers must be added here first, then implemented.
 
 ## 1. Toolchain constraints inherited from spiral-rs
 
-spiral-rs at this revision is **not vanilla stable Rust**. The `inspiring`
-crate inherits these constraints:
+spiral-rs at this revision relaxes the old AVX-512-only build constraints. The
+`inspiring` crate inherits these constraints:
 
 | Constraint | Source | Mitigation |
 |---|---|---|
-| Nightly toolchain required: `#![feature(stdarch_x86_avx512)]` in `lib.rs`. | `spiral-rs/src/lib.rs:1` | `inspiring/rust-toolchain.toml` pins nightly (channel pinned to a date close to the revision's authoring date so behaviour is reproducible). |
-| AVX-512 codegen: NTT inner loops use `_mm512_*` intrinsics behind `#[cfg(target_feature = "avx2")]`, but the actual instructions issued require AVX-512 (the `#[cfg]` gate is a misnomer in this revision). | `spiral-rs/src/ntt.rs` (multiple sites, `_mm512_load_si512`, `_mm512_cmpgt_epu64_mask`, etc.) | `inspiring/.cargo/config.toml` sets `target-cpu=skylake-avx512`. CI runs on `ubuntu-latest` (which supports AVX-512); a non-AVX-512 fallback is *not* in scope for this crate. |
-| **Scalar fallback `multiply` is silently buggy for `crt_count == 1`** (the regime InspiRING runs in). `arith::multiply_add_modular`'s `crt_count == 1` branch returns `a*b mod q` and **drops the accumulator `x`** — so the `multiply_add_poly` inner loop of `poly::multiply` (`#[cfg(not(target_feature = "avx2"))]`) keeps only the last gadget term instead of the sum. Every `KS.Switch` against a `[ℓ × 1]` digit column then collapses to zero and the full-pipeline `transform → aggregate → collapse` round-trip silently miscomputes. | `spiral-rs/src/arith.rs:28-33` (`multiply_add_modular`), driven from `spiral-rs/src/poly.rs:404` (`multiply_add_poly`) and `spiral-rs/src/poly.rs:543` (scalar `multiply`). The AVX2 sibling at `spiral-rs/src/poly.rs:566` accumulates in `_mm256_add_epi64` and reduces *after* the loop, so it is correct. | `inspiring/src/lib.rs` `compile_error!`s the build unless `target_feature = "avx512f"` is set. `inspiring/.cargo/config.toml` makes `cargo build`/`cargo test` pick that target by default. The non-AVX path is therefore unreachable in `inspiring`. |
+| Stable Rust is sufficient; the old `#![feature(stdarch_x86_avx512)]` gate is gone. | `spiral-rs/src/lib.rs:1` | `inspiring/rust-toolchain.toml` pins stable `1.89.0`. |
+| AVX-512 is no longer a correctness requirement for the NTT path. | `spiral-rs/src/ntt/` | `inspiring/.cargo/config.toml` no longer forces `target-cpu=skylake-avx512`; CI builds without an AVX-512 preflight. |
+| The scalar `multiply` fallback is correct for `crt_count == 1`. `arith::multiply_add_modular` now adds the accumulator `x` after `a*b mod q`. | `spiral-rs/src/arith.rs:28-33`, plus upstream test `multiply_add_modular_single_crt_includes_accumulator` | `inspiring` removed its `compile_error!` AVX-512 gate. The local regression test `spiral_matrix_multiply_accumulates_along_inner_dim` remains as a guard against future drift. |
 | Memory alignment of polynomial buffers is 64 bytes (`AlignedMemory64`). | `spiral-rs/src/aligned_memory.rs:8` | We always allocate `PolyMatrix*` via spiral-rs constructors (`PolyMatrixRaw::zero`, etc.), never via `Vec<u64>`. |
 
-The README, the `compile_error!` in `src/lib.rs`, and `inspiring/.cargo/config.toml` document these constraints explicitly. The full annotated walk-through of the `multiply_add_modular` failure mode lives in the comment block above the `compile_error!` in `src/lib.rs` — that comment is the single source of truth for *why* the AVX-512 gate is a correctness requirement.
+The README, `src/lib.rs`, and `inspiring/.cargo/config.toml` document these
+constraints explicitly. The old AVX-512 gate was removed after repinning to
+the fork because the single-CRT accumulator bug is fixed upstream.
 
 ---
 

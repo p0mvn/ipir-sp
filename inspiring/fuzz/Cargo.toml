@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 inspiring = { path = ".." }
 libfuzzer-sys = "0.4"
-spiral-rs = { git = "https://github.com/menonsamir/spiral-rs.git", rev = "6929441c6551769b7d099d3af3df347cde3bae7b" }
+spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", rev = "6f5b66c6a5a639827c6486c59d31c7ec2d4399a8" }
 
 [[bin]]
 name = "pack_no_panic"

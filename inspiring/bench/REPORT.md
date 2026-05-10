@@ -48,6 +48,6 @@ number.
 
 ## Latest Local Results
 
-Not recorded in-tree yet. Run `cargo bench --bench pack` on the target
-AVX-512 host and copy Criterion's `offline_preprocess/4096` and
-`online_pack/4096` medians here when producing a release artifact.
+Not recorded in-tree yet. Run `cargo bench --bench pack` on the target host and
+copy Criterion's `offline_preprocess/4096` and `online_pack/4096` medians here
+when producing a release artifact.

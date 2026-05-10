@@ -3,10 +3,10 @@ name: ypir-sp on inspiring
 overview: Port YPIR-SP onto the inspiring crate as a new sibling crate `ypir-sp` inside the existing `/root/inspire` workspace, replacing CDKS-style ring-packing with InspiRING.Pack while reusing YPIR's u32-based SimplePIR matmul layer verbatim. Single-CRT throughout the RLWE side.
 todos:
   - id: repin
-    content: Phase 0 — Repin `inspiring` from spiral-rs `6929441` to `f2c23c7`; fix any API drift; re-evaluate the AVX-512 compile gate; rerun `cargo test -p inspiring`; refresh `docs/spiral-rs-mapping.md` and SPEC.md
-    status: pending
+    content: Phase 0 — Repin `inspiring` from `menonsamir/spiral-rs` rev `6929441` to Valar's `valargroup/spiral-rs` fork rev `6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`; fix any API drift; remove the obsolete AVX-512 compile gate if tests confirm the fork's scalar path; rerun `cargo test -p inspiring`; refresh `docs/spiral-rs-mapping.md` and SPEC.md
+    status: completed
   - id: workspace
-    content: Phase 1 — Convert /root/inspire into a Cargo workspace with `inspiring` + new `ypir-sp` member; copy AVX-512 toolchain config (spiral-rs comes transitively via inspiring)
+    content: Phase 1 — Convert /root/inspire into a Cargo workspace with `inspiring` + new `ypir-sp` member; reuse `inspiring`'s stable toolchain config (spiral-rs comes transitively via inspiring)
     status: pending
   - id: params
     content: Phase 2 — Add `ypir-sp/src/params.rs` mapping `params_for_simplepir(num_items, item_size_bits)` to `(inspiring::RlweParams, YpirSchemeParams)` at paper Table 5 row 2
@@ -51,7 +51,7 @@ flowchart LR
         prep[PackPreprocessed::build]
         pack[pack b, pre]
     end
-    subgraph SPIRAL[spiral-rs rev 6929441 single-CRT]
+    subgraph SPIRAL[valargroup/spiral-rs rev 6f5b66c6 single-CRT]
         params[Params crt_count=1]
         poly[PolyMatrix*]
     end
@@ -65,18 +65,18 @@ flowchart LR
 
 ## Architectural decisions, locked
 
-- **Single workspace, single spiral-rs pin.** `/root/inspire` becomes a Cargo workspace with members `inspiring` and `ypir-sp`. Both share **`spiral-rs rev = f2c23c7`** (YPIR-SP's reference pin), single-CRT (`crt_count == 1`), and the AVX-512 toolchain. This sidesteps the impossibility of linking two spiral-rs revs in one binary and keeps the YPIR-SP reference unchanged — so any future cross-check against the YPIR paper's measurements lands at byte-equality on the spiral-rs side. We move InspiRING off rev `6929441` (its current pin); see Phase 0 for the cleanup.
+- **Single workspace, single spiral-rs pin.** `/root/inspire` becomes a Cargo workspace with members `inspiring` and `ypir-sp`. Both share Valar's **`valargroup/spiral-rs` fork at `6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`**, single-CRT (`crt_count == 1`), and the fork's non-AVX-512 path. This sidesteps the impossibility of linking two spiral-rs packages in one binary while keeping the dependency on a maintained fork. We move InspiRING off `menonsamir/spiral-rs` rev `6929441`; see Phase 0 for the cleanup.
 - **`inspiring` is not modified.** The integration lives entirely in `ypir-sp`. If a missing primitive surfaces (e.g. a modulus-switch helper), it is added to `ypir-sp`, not punched through `inspiring`. This keeps the `inspiring_vs_cdks_recursion.rs` test honest.
 - **YPIR-SP parameter set 2.** Initial target is paper Table 5 row 2 — `(log d, log q, log p, ℓ, z) = (11, 56, 15, 3, 2^19)` — which is the closest match to YPIR-SP's `params_for_scenario_simplepir` (`poly_len = 2048`, `q ≈ 2^56` via `[268369921, 249561089]` 2-CRT, `p = 1<<14`, `t_exp_left = 3`). Single-CRT means we materialise that `q` as one 56-bit prime instead of the two 28-bit primes; the InspiRING SPEC already validates this combination.
 
-## Phase 0 — Repin `inspiring` to spiral-rs `f2c23c7`
+## Phase 0 — Repin `inspiring` to Valar's spiral-rs fork
 
-Before any new code is written, flip [`inspiring/Cargo.toml`](/root/inspire/inspiring/Cargo.toml) from `rev = 6929441c6551769b7d099d3af3df347cde3bae7b` to `rev = f2c23c7` (matching [`ypir/Cargo.toml`](/root/ypir/Cargo.toml)). Then:
+Before any new code is written, flip [`inspiring/Cargo.toml`](/root/inspire/inspiring/Cargo.toml) from `menonsamir/spiral-rs` rev `6929441c6551769b7d099d3af3df347cde3bae7b` to `valargroup/spiral-rs` rev `6f5b66c6a5a639827c6486c59d31c7ec2d4399a8` (package `valar-spiral-rs`, dependency alias `spiral-rs`). Then:
 
 1. **Run `cargo check -p inspiring`** to surface API drift between the two revisions. Likely-affected symbols: `gadget_invert_alloc`, `automorph_alloc`, `to_ntt_alloc` / `from_ntt_alloc`, `stack_ntt`, `multiply`, `DiscreteGaussian::init`, `PolyMatrixRaw::random_rng` / `noise`. Patch each call site in `inspiring/src/` against the new signatures.
-2. **Re-evaluate the AVX-512 `compile_error!` gate** in [`src/lib.rs:80-144`](/root/inspire/inspiring/src/lib.rs). The gate exists because `arith::multiply_add_modular` at rev `6929441` drops the accumulator on `crt_count == 1`. At rev `f2c23c7` the bug may have been fixed upstream; if so, the gate can be relaxed to a runtime feature check (or removed entirely) and the corresponding regression test (`spiral_matrix_multiply_accumulates_along_inner_dim` in [`src/key_switching.rs:323`](/root/inspire/inspiring/src/key_switching.rs)) can be retitled to a generic "spiral-rs multiply correctness" guard. If the bug still exists, leave the gate alone but update its comment block to point at the new revision.
+2. **Remove the AVX-512 `compile_error!` gate** in [`src/lib.rs`](/root/inspire/inspiring/src/lib.rs) if the fork's scalar path passes the existing regression guard. The gate exists because `arith::multiply_add_modular` at rev `6929441` drops the accumulator on `crt_count == 1`; Valar's fork fixes that path.
 3. **Run `cargo test -p inspiring`** at the new pin. All existing tests must pass — `lemma1_trace`, `transform_correctness`, `aggregate_correctness`, `collapse_correctness`, `pack_roundtrip`, `python_oracle_match`, `noise_theorem2`, `offline_online_equivalence`, `parameter_validation`, `inspiring_vs_cdks_recursion`. Any drift here is a Phase 0 blocker, not a Phase 1 problem.
-4. **Update [`docs/spiral-rs-mapping.md`](/root/inspire/inspiring/docs/spiral-rs-mapping.md)** — currently every reference to `6929441c6551769b7d099d3af3df347cde3bae7b` and "Require AVX-512 (for now)" needs to point at `f2c23c7`. Re-verify each row of §2's mapping table at the new revision; in particular re-check `gadget::get_bits_per`'s formula since that's the source of the `RlweParams::new` validator's correctness.
+4. **Update [`docs/spiral-rs-mapping.md`](/root/inspire/inspiring/docs/spiral-rs-mapping.md)** — references to the old `menonsamir/spiral-rs` pin and "Require AVX-512 (for now)" need to point at the Valar fork. Re-verify each row of §2's mapping table at the new revision; in particular re-check `gadget::get_bits_per`'s formula since that's the source of the `RlweParams::new` validator's correctness.
 5. **Update [`SPEC.md`](/root/inspire/inspiring/SPEC.md)** if it pins a revision (likely yes — paper attribution typically does).
 
 Acceptance: `cargo check -p inspiring` clean, `cargo test -p inspiring` green, docs updated. **No Phase 1 work begins until Phase 0 is green.**
@@ -85,9 +85,9 @@ Acceptance: `cargo check -p inspiring` clean, `cargo test -p inspiring` green, d
 
 Create `/root/inspire/Cargo.toml` (workspace), keeping `inspiring` and adding `ypir-sp`:
 - `[workspace] members = ["inspiring", "ypir-sp"]`, `resolver = "2"`.
-- `ypir-sp/Cargo.toml`: `inspiring = { path = "../inspiring" }`, plus the YPIR runtime deps at the same versions YPIR uses (`rand`, `rand_chacha`, `log`, `env_logger`, `clap`, `fastrand`, `serde`, `serde_json`, `sha1`). Drop the `actix-*` HTTP-server stack from initial scope to keep the surface small (re-add behind a `http_server` feature once the core is green, if you still want a binary). spiral-rs is **transitive** via `inspiring`; `ypir-sp` does *not* declare its own spiral-rs dep, so there is exactly one resolved revision (`f2c23c7`) in the workspace.
+- `ypir-sp/Cargo.toml`: `inspiring = { path = "../inspiring" }`, plus the YPIR runtime deps at the same versions YPIR uses (`rand`, `rand_chacha`, `log`, `env_logger`, `clap`, `fastrand`, `serde`, `serde_json`, `sha1`). Drop the `actix-*` HTTP-server stack from initial scope to keep the surface small (re-add behind a `http_server` feature once the core is green, if you still want a binary). spiral-rs is **transitive** via `inspiring`; `ypir-sp` does *not* declare its own spiral-rs dep, so there is exactly one resolved fork revision (`6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`) in the workspace.
 - `ypir-sp/src/lib.rs` mirrors YPIR's module layout but excludes `packing.rs` (replaced) and `lwe.rs`'s LWE→RLWE bits (delegated to `inspiring::lwe`).
-- Reuse YPIR's `rust-toolchain.toml` and add `.cargo/config.toml` with `target-cpu=skylake-avx512` so InspiRING's `compile_error!` gate is satisfied.
+- Reuse `inspiring`'s stable `rust-toolchain.toml`; no `target-cpu=skylake-avx512` override is needed after the Valar fork repin.
 
 ## Phase 2 — Parameter mapping
 
@@ -184,13 +184,13 @@ If observed online time is *not* lower than YPIR-CDKS, that is a strong signal w
 
 ## Risk register
 
-- **Spiral-rs API drift between revisions** (InspiRING was on `6929441`, both crates now on `f2c23c7`). Mitigation: Phase 0 ends with `cargo test -p inspiring` at the new pin — every existing InspiRING test runs against `f2c23c7` before any Phase 1 code lands. Drift is fixed at Phase 0 and never seen again. Estimated drift surface is small — both revisions are AVX-512-era.
-- **`crt_count == 1` performance regression** in spiral-rs's NTT (the AVX-512 path is the same, but Barrett reduction stages differ). Mitigation: Phase 8 bench gate; if regression > 30%, file an upstream issue and consider porting `inspiring`'s back-end to a forked spiral-rs with our own single-CRT NTT.
+- **Spiral-rs API drift between revisions/forks** (InspiRING was on `menonsamir/spiral-rs` rev `6929441`, both crates now consume Valar's fork rev `6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`). Mitigation: Phase 0 ends with `cargo test -p inspiring` at the new pin — every existing InspiRING test runs against the fork before any Phase 1 code lands. Drift is fixed at Phase 0 and never seen again.
+- **`crt_count == 1` performance regression** in spiral-rs's NTT after moving to the non-AVX-512 fork. Mitigation: Phase 8 bench gate; if regression > 30%, file an upstream issue and consider a targeted backend patch.
 - **`hint_0` block layout mismatch.** YPIR's `hint_0` is `poly_len × db_cols` row-major u64s; InspiRING's `crs` is a `[d, 1]` `PolyMatrixNTT` whose row `k` is the `k`-th LWE `a` vector. Off-by-one in the row/col extraction is the most likely Phase 3 bug. Mitigation: `tests/pack_replaces_cdks.rs` is the canary; add a focused unit test `crs_block_extraction.rs` that compares InspiRING's `transform(LWE { a })` on extracted blocks against YPIR's `prep_pack_lwes` on the same input.
 - **Double-scaling of `b` by `d`.** Both YPIR's `pack_using_precomp_vals` and InspiRING's `transform` apply `d⁻¹`/`d` factors, but at different stages. Phase 5's doc-comment + `pack_replaces_cdks.rs` decryption assertion is the firewall.
 - **Loss of YPIR's HTTP server bins.** Out of scope initially; gate behind `feature = "http_server"` once the core is green.
 
 ## Acceptance criteria
 
-(a) `cargo test -p ypir-sp` green on AVX-512 host; (b) `cargo test -p inspiring` green at the new spiral-rs pin (`f2c23c7`) — Phase 0 acceptance; (c) end-to-end test recovers the queried row byte-for-byte under fixed seed; (d) `ks_call_count` test asserts the linear-cascade count exactly; (e) bench numbers within 2x of paper Table 5 row 2.
+(a) `cargo test -p ypir-sp` green; (b) `cargo test -p inspiring` green at the Valar fork pin (`6f5b66c6a5a639827c6486c59d31c7ec2d4399a8`) — Phase 0 acceptance; (c) end-to-end test recovers the queried row byte-for-byte under fixed seed; (d) `ks_call_count` test asserts the linear-cascade count exactly; (e) bench numbers within 2x of paper Table 5 row 2.
 

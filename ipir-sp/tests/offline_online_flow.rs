@@ -2,10 +2,10 @@ use inspiring::key_switching::ks_call_count;
 use inspiring::{GadgetParams, RlweParams};
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use ypir_sp::client::{generate_ks_pairs, ClientSecret};
-use ypir_sp::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
-use ypir_sp::server::{build_pack_preprocessed_blocks, offline_precompute_from_hint, YServer};
-use ypir_sp::YpirSchemeParams;
+use ipir_sp::client::{generate_ks_pairs, ClientSecret};
+use ipir_sp::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
+use ipir_sp::server::{build_pack_preprocessed_blocks, offline_precompute_from_hint, YServer};
+use ipir_sp::YpirSchemeParams;
 
 fn tiny_rlwe() -> RlweParams {
     RlweParams::new(
@@ -160,8 +160,8 @@ fn client_keys_drive_server_online_response_serialization() {
     let expected_row_1: Vec<_> = expected_intermediate
         .iter()
         .map(|value| {
-            ypir_sp::modulus_switch::rescale(
-                ypir_sp::modulus_switch::rescale(*value, rlwe.q, ypir.q_prime_1),
+            ipir_sp::modulus_switch::rescale(
+                ipir_sp::modulus_switch::rescale(*value, rlwe.q, ypir.q_prime_1),
                 ypir.q_prime_1,
                 rlwe.q,
             )

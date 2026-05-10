@@ -386,6 +386,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipir-sp"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "criterion",
+ "env_logger",
+ "fastrand",
+ "inspiring",
+ "log",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+ "sha1",
+ "valar-spiral-rs",
+]
+
+[[package]]
 name = "is-terminal"
 version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -923,24 +941,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "ypir-sp"
-version = "0.1.0"
-dependencies = [
- "clap",
- "criterion",
- "env_logger",
- "fastrand",
- "inspiring",
- "log",
- "rand",
- "rand_chacha",
- "serde",
- "serde_json",
- "sha1",
- "valar-spiral-rs",
 ]
 
 [[package]]

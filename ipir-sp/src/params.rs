@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Table-5 row-2 ring degree.
 pub const POLY_LEN: usize = 2048;
-/// YPIR-SP row-2 plaintext modulus (`log p = 14`).
+/// IPIR-SP row-2 plaintext modulus (`log p = 14`).
 pub const PLAINTEXT_MODULUS: u64 = 1 << 14;
 /// One 56-bit NTT-friendly prime with `q = 1 mod 2d`.
 pub const SINGLE_CRT_Q: u64 = 72_057_594_037_641_217;
@@ -19,9 +19,9 @@ pub const Q2_BITS: usize = 28;
 pub const T_EXP_LEFT: usize = 3;
 /// YPIR's right expansion gadget width for the SimplePIR scenario.
 pub const T_EXP_RIGHT: usize = 2;
-/// YPIR-SP Table-5 row-2 gadget base exponent (`z = 2^19`).
+/// IPIR-SP Table-5 row-2 gadget base exponent (`z = 2^19`).
 pub const GADGET_BITS_PER: u32 = 19;
-/// YPIR-SP Table-5 row-2 gadget length.
+/// IPIR-SP Table-5 row-2 gadget length.
 pub const GADGET_ELL: usize = 3;
 
 /// YPIR-specific knobs that live outside `inspiring::RlweParams`.
@@ -72,7 +72,7 @@ pub struct YpirSchemeParams {
 
 /// Return `(inspiring::RlweParams, YpirSchemeParams)` for YPIR's SimplePIR scenario.
 ///
-/// The initial target is YPIR-SP Table 5 row 2:
+/// The initial target is IPIR-SP Table 5 row 2:
 /// `(log d, log q, log p, ell, z) = (11, 56, 14, 3, 2^19)`.
 pub fn params_for_simplepir(
     num_items: u64,

@@ -1,15 +1,15 @@
-# YPIR-SP on InspiRING Benchmark Report
+# IPIR-SP on InspiRING Benchmark Report
 
 Phase 8 adds Criterion benchmarks in `benches/end_to_end.rs` for the YPIR
 headline shape:
 
 ```bash
-cargo bench -p ypir-sp --bench end_to_end
+cargo bench -p ipir-sp --bench end_to_end
 ```
 
 By default this runs a smaller development profile that keeps the same
 offline/online benchmark shape but uses `d = 64`, one RLWE output, and small
-test moduli. Set `YPIR_SP_BENCH_FULL=1` to attempt the full headline profile.
+test moduli. Set `IPIR_SP_BENCH_FULL=1` to attempt the full headline profile.
 
 The full benchmark profile uses `params_for_simplepir(32768, 131072)`, which
 yields:
@@ -31,7 +31,7 @@ yields:
 | `offline_crs_extract_and_preprocess/5` | YPIR `hint_0` block extraction plus InspiRING `PackPreprocessed::build` for all five RLWE outputs. Setup time clones the deterministic hint and regenerates KS pairs, so the measured body is server-side CRS extraction/preprocessing. |
 | `online_pack_and_serialize/5` | InspiRING packing for all five online `b` blocks plus row-wise single-CRT response modulus switching and byte serialization. This starts after SimplePIR's matrix multiplication has produced the intermediate values. |
 
-The scalar SimplePIR matrix and hint kernels in `ypir-sp` are correctness
+The scalar SimplePIR matrix and hint kernels in `ipir-sp` are correctness
 ports, not the optimized YPIR kernels. For that reason the Phase 8 benchmark
 isolates the packing boundary that is meant to replace CDKS rather than timing
 the current portable matrix loops as a YPIR performance claim.
@@ -43,7 +43,7 @@ values, and `PackPreprocessed` cache.
 
 ## Paper Comparison Targets
 
-| Metric | YPIR-CDKS target | YPIR-SP on InspiRING target |
+| Metric | YPIR-CDKS target | IPIR-SP on InspiRING target |
 | --- | ---: | ---: |
 | Offline upload, KS keys | ~462 KiB | ~84 KiB compressed, ~96 KiB as current `u64` wire helper |
 | Online server time | ~55.6 ms implied baseline | ~40 ms, about 28% lower |
@@ -57,7 +57,7 @@ accounting, response size, and deterministic `||e_pack||_inf` bit length.
 Attempted on 2026-05-10 in the current Cursor workspace:
 
 ```bash
-cargo bench -p ypir-sp --bench end_to_end
+cargo bench -p ipir-sp --bench end_to_end
 ```
 
 Result: no Criterion medians were produced. The benchmark executable started,
@@ -67,7 +67,7 @@ then exited with `SIGKILL` before emitting the fixture summary or timing output:
 Finished `bench` profile [optimized] target(s) in 0.06s
 Running benches/end_to_end.rs (target/release/deps/end_to_end-0416eeddac60d254)
 Gnuplot not found, using plotters backend
-error: bench failed, to rerun pass `-p ypir-sp --bench end_to_end`
+error: bench failed, to rerun pass `-p ipir-sp --bench end_to_end`
 
 Caused by:
   process didn't exit successfully: `/root/inspire/target/release/deps/end_to_end-0416eeddac60d254 --bench` (signal: 9, SIGKILL: kill)
@@ -89,13 +89,13 @@ After adding the smaller default profile and explicit transient-buffer drops,
 the default benchmark completed on the same host:
 
 ```bash
-cargo bench -p ypir-sp --bench end_to_end
+cargo bench -p ipir-sp --bench end_to_end
 ```
 
 Fixture summary:
 
 ```text
-profile=ypir_sp_smaller_d64_64_128
+profile=ipir_sp_smaller_d64_64_128
 rows=64
 item_bits=128
 d=64
@@ -111,5 +111,5 @@ Criterion medians:
 
 | Criterion id | Median | 95% interval |
 | --- | ---: | ---: |
-| `ypir_sp_smaller_d64_64_128/offline_crs_extract_and_preprocess/1` | `13.692 ms` | `13.460 ms` - `13.926 ms` |
-| `ypir_sp_smaller_d64_64_128/online_pack_and_serialize/1` | `1.1198 ms` | `1.1018 ms` - `1.1374 ms` |
+| `ipir_sp_smaller_d64_64_128/offline_crs_extract_and_preprocess/1` | `13.692 ms` | `13.460 ms` - `13.926 ms` |
+| `ipir_sp_smaller_d64_64_128/online_pack_and_serialize/1` | `1.1198 ms` | `1.1018 ms` - `1.1374 ms` |

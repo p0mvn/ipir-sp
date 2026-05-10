@@ -1,16 +1,16 @@
-//! Phase 8 benchmark for the YPIR-SP-on-InspiRING integration.
+//! Phase 8 benchmark for the IPIR-SP-on-InspiRING integration.
 //!
 //! Run with:
 //!
 //! ```text
-//! cargo bench -p ypir-sp --bench end_to_end
+//! cargo bench -p ipir-sp --bench end_to_end
 //! ```
 //!
 //! By default the fixture uses a smaller `d = 64` shape that runs on ordinary
-//! development machines. Set `YPIR_SP_BENCH_FULL=1` to attempt the headline
+//! development machines. Set `IPIR_SP_BENCH_FULL=1` to attempt the headline
 //! YPIR command shape: `cargo run --release -- 32768 131072`.
 //!
-//! The current `ypir-sp` crate intentionally keeps the SimplePIR matrix kernels
+//! The current `ipir-sp` crate intentionally keeps the SimplePIR matrix kernels
 //! scalar and portable. These benches therefore isolate the InspiRING packing
 //! boundary for the full target shape: CRS extraction + pack preprocessing, and
 //! online pack + single-CRT response serialization after SimplePIR has produced
@@ -22,16 +22,16 @@ use criterion::{black_box, criterion_group, criterion_main, BatchSize, Benchmark
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use spiral_rs::poly::{from_ntt_alloc, PolyMatrix};
-use ypir_sp::client::{generate_ks_pairs, ClientSecret};
-use ypir_sp::modulus_switch::{serialize_rlwe_response, switched_rlwe_response_len};
-use ypir_sp::params::{
+use ipir_sp::client::{generate_ks_pairs, ClientSecret};
+use ipir_sp::modulus_switch::{serialize_rlwe_response, switched_rlwe_response_len};
+use ipir_sp::params::{
     params_for_simplepir, PLAINTEXT_MODULUS, Q_PRIME_1, Q_PRIME_2, SINGLE_CRT_Q,
 };
-use ypir_sp::serialize::serialized_ks_pair_len;
-use ypir_sp::server::{
+use ipir_sp::serialize::serialized_ks_pair_len;
+use ipir_sp::server::{
     build_pack_preprocessed_blocks, offline_precompute_from_hint, pack_intermediate_blocks,
 };
-use ypir_sp::YpirSchemeParams;
+use ipir_sp::YpirSchemeParams;
 
 use inspiring::{GadgetParams, PackPreprocessed, RlweParams};
 
@@ -67,7 +67,7 @@ struct BenchFixture<'a> {
 }
 
 const SMALL_SPEC: BenchSpec = BenchSpec {
-    name: "ypir_sp_smaller_d64_64_128",
+    name: "ipir_sp_smaller_d64_64_128",
     rows: 64,
     item_size_bits: 128,
     degree: 64,
@@ -99,7 +99,7 @@ fn deterministic_a(params: &RlweParams, column: usize, coeff: usize) -> u64 {
 
 fn full_spec() -> BenchSpec {
     BenchSpec {
-        name: "ypir_sp_32768_131072",
+        name: "ipir_sp_32768_131072",
         rows: NUM_ITEMS as usize,
         item_size_bits: ITEM_SIZE_BITS,
         degree: 2048,
@@ -116,7 +116,7 @@ fn full_spec() -> BenchSpec {
 }
 
 fn selected_spec() -> BenchSpec {
-    if std::env::var_os("YPIR_SP_BENCH_FULL").is_some() {
+    if std::env::var_os("IPIR_SP_BENCH_FULL").is_some() {
         full_spec()
     } else {
         SMALL_SPEC
@@ -309,7 +309,7 @@ fn bench_end_to_end(c: &mut Criterion) {
         );
 
     eprintln!(
-        "ypir-sp target: profile={}, rows={}, item_bits={}, d={}, outputs={}, db_cols={}, serialized_ks_pair={} KiB, compressed_ks_pair={} KiB, cdks_upload={} KiB, response={} KiB, ||e_pack||_inf_bits={}, paper_noise_target_bits<={:.1}, cdks_online_target={} ms",
+        "ipir-sp target: profile={}, rows={}, item_bits={}, d={}, outputs={}, db_cols={}, serialized_ks_pair={} KiB, compressed_ks_pair={} KiB, cdks_upload={} KiB, response={} KiB, ||e_pack||_inf_bits={}, paper_noise_target_bits<={:.1}, cdks_online_target={} ms",
         fixture.name,
         fixture.ypir.db_rows,
         fixture.ypir.item_size_bits,

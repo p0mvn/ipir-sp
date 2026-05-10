@@ -1,4 +1,4 @@
-//! Single-CRT modulus-switch helpers for YPIR-SP response transport.
+//! Single-CRT modulus-switch helpers for IPIR-SP response transport.
 
 use inspiring::RlweCiphertext;
 use spiral_rs::poly::{from_ntt_alloc, PolyMatrix};

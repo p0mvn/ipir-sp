@@ -1,7 +1,7 @@
-//! Wire serialization helpers for YPIR-SP key material.
+//! Wire serialization helpers for IPIR-SP key material.
 //!
 //! YPIR's CDKS upload serializes `log d` expansion matrices after condensing
-//! two CRT limbs into one `u64`. YPIR-SP uses single-CRT InspiRING matrices,
+//! two CRT limbs into one `u64`. IPIR-SP uses single-CRT InspiRING matrices,
 //! so the stable wire format is simply the little-endian `u64` coefficient
 //! stream for `K_g` followed by `K_h`.
 

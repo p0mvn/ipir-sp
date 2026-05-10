@@ -242,7 +242,7 @@ where
 
     /// Perform the SimplePIR online server path and serialize the response.
     ///
-    /// This composes the three YPIR-SP online pieces:
+    /// This composes the three IPIR-SP online pieces:
     ///
     /// 1. first-dimension query/database multiplication,
     /// 2. InspiRING packing of the resulting `b` blocks,
@@ -330,7 +330,7 @@ impl CrsBlock {
 /// Produce offline values from a supplied `hint_0`.
 ///
 /// The old YPIR implementation continues from this point into CDKS
-/// `prep_pack_many_lwes` and `precompute_pack`; `ypir-sp` stops at CRS block
+/// `prep_pack_many_lwes` and `precompute_pack`; `ipir-sp` stops at CRS block
 /// extraction so the next layer can call `inspiring::PackPreprocessed::build`.
 #[must_use]
 pub fn offline_precompute_from_hint(

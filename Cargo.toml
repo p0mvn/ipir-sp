@@ -1,5 +1,5 @@
 [workspace]
-members = ["inspiring", "ypir-sp"]
+members = ["inspiring", "ipir-sp"]
 resolver = "2"
 
 [workspace.dependencies]

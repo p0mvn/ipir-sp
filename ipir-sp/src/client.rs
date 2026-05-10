@@ -1,4 +1,4 @@
-//! Client-side key material for the YPIR-SP packing layer.
+//! Client-side key material for the IPIR-SP packing layer.
 //!
 //! YPIR's CDKS path uploads `log d` expansion matrices. The InspiRING path
 //! instead uploads two key-switching matrices per preprocessing block:

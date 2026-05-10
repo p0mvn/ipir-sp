@@ -31,7 +31,7 @@ todos:
     status: completed
   - id: benches
     content: Add criterion benchmarks reproducing Table 5 (both parameter sets); produce bench/REPORT.md comparing to paper numbers
-    status: pending
+    status: completed
   - id: hardening
     content: "Production hardening: rustdoc + missing_docs lint, clippy/fmt, cargo-fuzz target, constant-time review, GitHub Actions CI, SECURITY.md, paper attribution"
     status: pending

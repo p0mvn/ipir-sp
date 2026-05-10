@@ -9,7 +9,10 @@ use inspiring::key_switching::KeySwitchingMatrix;
 use inspiring::{
     pack, InspiringError, LweBatch, LweCiphertext, PackPreprocessed, RlweCiphertext, RlweParams,
 };
-use spiral_rs::poly::{to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw};
+use rayon::prelude::*;
+use spiral_rs::poly::{
+    add_into, from_ntt_alloc, multiply, to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw,
+};
 
 use crate::modulus_switch::serialize_rlwe_response;
 use crate::params::YpirSchemeParams;
@@ -192,7 +195,10 @@ where
         &self,
         rlwe: &RlweParams,
         query_polys: &[Vec<u64>],
-    ) -> Vec<u64> {
+    ) -> Vec<u64>
+    where
+        T: Sync,
+    {
         assert_eq!(
             self.db_rows() % rlwe.d,
             0,
@@ -209,25 +215,66 @@ where
 
         let cols = self.db_cols();
         let rows = self.db_rows_padded();
+        // The offline query polynomials are reused for every DB column, so pay
+        // the forward NTT cost once and keep the hot path in evaluation form.
+        let query_ntts: Vec<_> = query_polys
+            .iter()
+            .map(|query| polynomial_to_ntt(rlwe, query))
+            .collect();
+
+        // Columns are independent. Each worker returns one coefficient-form
+        // column so the final scatter can preserve YPIR's row-major hint layout.
+        let columns: Vec<_> = (0..cols)
+            .into_par_iter()
+            .map(|col| self.generate_hint_column_from_query_ntts(rlwe, rows, col, &query_ntts))
+            .collect();
+
         let mut hint_0 = vec![0u64; rlwe.d * cols];
 
-        for col in 0..cols {
-            let mut sum = vec![0u64; rlwe.d];
-            for (block_idx, query) in query_polys.iter().enumerate() {
-                let row_start = block_idx * rlwe.d;
-                let db_poly: Vec<_> = (0..rlwe.d)
-                    .map(|coeff| self.db[col * rows + row_start + coeff].to_u64() % rlwe.q)
-                    .collect();
-                let prod = negacyclic_mul_mod(query, &db_poly, rlwe.q);
-                add_assign_mod(&mut sum, &prod, rlwe.q);
-            }
-
+        for (col, column) in columns.iter().enumerate() {
             for coeff in 0..rlwe.d {
-                hint_0[coeff * cols + col] = sum[coeff];
+                hint_0[coeff * cols + col] = column[coeff];
             }
         }
 
         hint_0
+    }
+
+    /// Compute one `hint_0` column from pre-transformed query polynomials.
+    ///
+    /// The accumulator stays in NTT form across all row blocks. This replaces
+    /// one inverse transform per product with a single inverse transform after
+    /// all products for the column have been added.
+    fn generate_hint_column_from_query_ntts<'a>(
+        &self,
+        rlwe: &'a RlweParams,
+        rows: usize,
+        col: usize,
+        query_ntts: &[PolyMatrixNTT<'a>],
+    ) -> Vec<u64> {
+        let mut acc = PolyMatrixNTT::zero(&rlwe.spiral, 1, 1);
+
+        for (block_idx, query_ntt) in query_ntts.iter().enumerate() {
+            let row_start = block_idx * rlwe.d;
+            let mut db_raw = PolyMatrixRaw::zero(&rlwe.spiral, 1, 1);
+            {
+                let db_poly = db_raw.get_poly_mut(0, 0);
+                for (coeff_idx, coeff) in db_poly.iter_mut().enumerate() {
+                    *coeff = self.db[col * rows + row_start + coeff_idx].to_u64() % rlwe.q;
+                }
+            }
+
+            let db_ntt = to_ntt_alloc(&db_raw);
+            let mut prod = PolyMatrixNTT::zero(&rlwe.spiral, 1, 1);
+            multiply(&mut prod, query_ntt, &db_ntt);
+            add_into(&mut acc, &prod);
+        }
+
+        from_ntt_alloc(&acc)
+            .get_poly(0, 0)
+            .iter()
+            .map(|coeff| coeff % rlwe.q)
+            .collect()
     }
 
     /// Generate `hint_0` and split it into InspiRING CRS blocks.
@@ -236,7 +283,10 @@ where
         &self,
         rlwe: &RlweParams,
         query_polys: &[Vec<u64>],
-    ) -> OfflinePrecomputedValues {
+    ) -> OfflinePrecomputedValues
+    where
+        T: Sync,
+    {
         let hint_0 = self.generate_hint_from_query_polys(rlwe, query_polys);
         offline_precompute_from_hint(rlwe, &self.params, hint_0)
     }
@@ -283,9 +333,23 @@ where
     }
 }
 
+/// Convert a coefficient-form polynomial into the single-CRT NTT domain.
+///
+/// Callers validate the polynomial length before reaching this helper; reducing
+/// here keeps both query and test inputs canonical under the RLWE modulus.
+fn polynomial_to_ntt<'a>(rlwe: &'a RlweParams, coeffs: &[u64]) -> PolyMatrixNTT<'a> {
+    let mut raw = PolyMatrixRaw::zero(&rlwe.spiral, 1, 1);
+    raw.get_poly_mut(0, 0)
+        .iter_mut()
+        .zip(coeffs)
+        .for_each(|(out, coeff)| *out = coeff % rlwe.q);
+    to_ntt_alloc(&raw)
+}
+
 /// IPIR-named alias for the YPIR-shaped server database.
 pub type IPIRServer<T> = YServer<T>;
 
+#[cfg(test)]
 fn add_assign_mod(out: &mut [u64], rhs: &[u64], modulus: u64) {
     assert_eq!(out.len(), rhs.len());
     for (out_coeff, rhs_coeff) in out.iter_mut().zip(rhs) {
@@ -293,6 +357,7 @@ fn add_assign_mod(out: &mut [u64], rhs: &[u64], modulus: u64) {
     }
 }
 
+#[cfg(test)]
 fn negacyclic_mul_mod(left: &[u64], right: &[u64], modulus: u64) -> Vec<u64> {
     assert_eq!(left.len(), right.len());
     let degree = left.len();
@@ -579,6 +644,34 @@ mod tests {
         }
     }
 
+    fn scalar_hint_reference(
+        server: &YServer<u16>,
+        rlwe: &RlweParams,
+        query_polys: &[Vec<u64>],
+    ) -> Vec<u64> {
+        let cols = server.db_cols();
+        let rows = server.db_rows_padded();
+        let mut hint_0 = vec![0u64; rlwe.d * cols];
+
+        for col in 0..cols {
+            let mut sum = vec![0u64; rlwe.d];
+            for (block_idx, query) in query_polys.iter().enumerate() {
+                let row_start = block_idx * rlwe.d;
+                let db_poly: Vec<_> = (0..rlwe.d)
+                    .map(|coeff| server.db()[col * rows + row_start + coeff].to_u64() % rlwe.q)
+                    .collect();
+                let prod = negacyclic_mul_mod(query, &db_poly, rlwe.q);
+                add_assign_mod(&mut sum, &prod, rlwe.q);
+            }
+
+            for coeff in 0..rlwe.d {
+                hint_0[coeff * cols + col] = sum[coeff];
+            }
+        }
+
+        hint_0
+    }
+
     #[test]
     fn server_stores_row_major_input_as_column_major() {
         let ypir = tiny_ypir(4, 3);
@@ -606,6 +699,43 @@ mod tests {
                 2 * 2 + 3 * 5 + 5 * 8 + 7 * 11
             ]
         );
+    }
+
+    #[test]
+    fn polynomial_to_ntt_roundtrips_reduced_coefficients() {
+        let rlwe = tiny_rlwe();
+        let coeffs = vec![0, 1, rlwe.q + 2, 3, rlwe.q * 2 + 4, 5, 6, 7];
+
+        let ntt = polynomial_to_ntt(&rlwe, &coeffs);
+        let raw = from_ntt_alloc(&ntt);
+
+        assert_eq!(raw.get_poly(0, 0), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn generate_hint_column_from_query_ntts_matches_scalar_column_reference() {
+        let rlwe = tiny_rlwe();
+        let ypir = tiny_ypir(16, 16);
+        let server = YServer::new(ypir.clone(), 0u16..256, false, true);
+        let query = vec![vec![3, 1, 4, 1, 5, 9, 2, 6], vec![5, 3, 5, 8, 9, 7, 9, 3]];
+        let query_ntts: Vec<_> = query
+            .iter()
+            .map(|poly| polynomial_to_ntt(&rlwe, poly))
+            .collect();
+        let col = 5;
+
+        let column = server.generate_hint_column_from_query_ntts(
+            &rlwe,
+            server.db_rows_padded(),
+            col,
+            &query_ntts,
+        );
+        let reference = scalar_hint_reference(&server, &rlwe, &query);
+        let expected_column: Vec<_> = (0..rlwe.d)
+            .map(|coeff| reference[coeff * ypir.db_cols + col])
+            .collect();
+
+        assert_eq!(column, expected_column);
     }
 
     #[test]
@@ -644,6 +774,19 @@ mod tests {
                 assert_eq!(hint_0[coeff * ypir.db_cols + col], (first + second) as u64);
             }
         }
+    }
+
+    #[test]
+    fn generate_hint_from_query_polys_matches_scalar_negacyclic_reference() {
+        let rlwe = tiny_rlwe();
+        let ypir = tiny_ypir(16, 16);
+        let server = YServer::new(ypir, 0u16..256, false, true);
+        let query = vec![vec![3, 1, 4, 1, 5, 9, 2, 6], vec![5, 3, 5, 8, 9, 7, 9, 3]];
+
+        let hint_0 = server.generate_hint_from_query_polys(&rlwe, &query);
+        let expected = scalar_hint_reference(&server, &rlwe, &query);
+
+        assert_eq!(hint_0, expected);
     }
 
     #[test]

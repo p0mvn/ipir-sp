@@ -31,7 +31,7 @@ todos:
     status: completed
   - id: docs
     content: Phase 9 — README + MIGRATION.md mapping every YPIR packing API to its `ypir-sp` replacement
-    status: pending
+    status: completed
 isProject: false
 ---
 

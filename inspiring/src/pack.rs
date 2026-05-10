@@ -41,8 +41,7 @@ pub struct RlweCiphertext<'a> {
 /// 1. Deterministic: no fresh randomness is sampled in this function.
 /// 2. Performs zero online `KS.Switch` matrix products; the `d − 1` logical
 ///    collapse steps are precomputed into [`PackPreprocessed`].
-/// 3. Does not touch `pre.kg`, `pre.kh`, or the automorphic images on the
-///    online path.
+/// 3. Does not retain or touch key-switching matrices on the online path.
 ///
 pub fn pack<'a>(
     b: &LweBatch,

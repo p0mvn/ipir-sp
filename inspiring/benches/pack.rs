@@ -253,7 +253,10 @@ fn preprocess_all_chunks(spec: BenchSpec) -> usize {
     let chunks: Vec<_> = (0..chunk_count)
         .map(|chunk_idx| build_chunk(&params, &s_tilde, spec, chunk_idx))
         .collect();
-    chunks.iter().map(|chunk| chunk.pre.a_agg.len()).sum()
+    chunks
+        .iter()
+        .filter(|chunk| chunk.pre.collapse_a_final_ntt.rows == 1)
+        .count()
 }
 
 fn noise_inf_norm(fixture: &OnlineFixture) -> i128 {

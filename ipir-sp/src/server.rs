@@ -727,7 +727,8 @@ mod tests {
             build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs).expect("build");
 
         assert_eq!(pre.len(), 2);
-        assert_eq!(pre[0].a_agg.len(), rlwe.d);
+        assert_eq!(pre[0].collapse_a_final_ntt.rows, 1);
+        assert_eq!(pre[0].collapse_b_offset_ntt.rows, 1);
     }
 
     #[test]

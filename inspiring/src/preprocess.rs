@@ -18,35 +18,16 @@ use crate::error::InspiringError;
 use crate::key_switching::{automorphic_image, KeySwitchingMatrix};
 use crate::params::RlweParams;
 
-/// All preprocessable data for a single CRS `A` and a single pair of
-/// key-switching matrices `(K_g, K_h)`.
+/// Lean online cache for a single CRS `A` and key-switching pair `(K_g, K_h)`.
 ///
 /// **API invariant (SPEC.md §10)**: this struct holds **exactly two**
-/// key-switching matrices. Any reviewer asked to add a third should
-/// instead read SPEC.md §9.h and the test `tests/inspiring_vs_cdks_recursion.rs`.
+/// affine collapse outputs. The key-switching matrices and their automorphic
+/// images are consumed during [`PackPreprocessed::build`] and are not retained
+/// on the online path.
 ///
 pub struct PackPreprocessed<'a> {
     /// Underlying parameter set.
     pub params: &'a RlweParams,
-
-    /// Stage-2 aggregated `â_agg = Σ_k a_hat[k] · X^k`. SPEC.md §5.
-    pub a_agg: Vec<PolyMatrixNTT<'a>>,
-
-    /// `K_g`: the base key-switching matrix for the `τ_g`-cycle.
-    pub kg: KeySwitchingMatrix<'a>,
-
-    /// `K_h`: the final-step key-switching matrix that folds the
-    /// `τ_h(s̃)` share into `s̃`.
-    pub kh: KeySwitchingMatrix<'a>,
-
-    /// Cache of `τ_g^i(K_g)` for `i ∈ [0, d/2 - 1)`, plus
-    /// `τ_h(τ_g^i(K_g))` for the second half. Computed once per
-    /// CRS so the online path never invokes an automorphism on `K_g`.
-    /// SPEC.md §6.
-    pub kg_images_left: Vec<KeySwitchingMatrix<'a>>,
-    /// Same as `kg_images_left` but pre-composed with `τ_h` for the
-    /// right-half collapse.
-    pub kg_images_right: Vec<KeySwitchingMatrix<'a>>,
 
     /// Final RLWE `c1` from collapsing the deterministic `a` trace.
     pub collapse_a_final_ntt: PolyMatrixNTT<'a>,
@@ -106,7 +87,7 @@ impl<'a> PackPreprocessed<'a> {
             .collect();
         let collapse_affine = precompute_collapse_affine(
             params,
-            a_agg.clone(),
+            a_agg,
             &kg_images_left,
             &kg_images_right,
             &kh,
@@ -114,11 +95,6 @@ impl<'a> PackPreprocessed<'a> {
 
         Ok(Self {
             params,
-            a_agg,
-            kg,
-            kh,
-            kg_images_left,
-            kg_images_right,
             collapse_a_final_ntt: collapse_affine.a_final_ntt,
             collapse_b_offset_ntt: collapse_affine.b_offset_ntt,
         })
@@ -241,16 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn build_precomputes_transform_aggregate_and_key_images() {
+    fn build_precomputes_affine_collapse_cache() {
         let params = params();
         let crs = crs(&params);
 
         let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
             .expect("valid preprocessing");
 
-        assert_eq!(pre.a_agg.len(), params.d);
-        assert_eq!(pre.kg_images_left.len(), params.d / 2 - 1);
-        assert_eq!(pre.kg_images_right.len(), params.d / 2 - 1);
         assert_eq!(pre.collapse_a_final_ntt.rows, 1);
         assert_eq!(pre.collapse_a_final_ntt.cols, 1);
         assert_eq!(pre.collapse_b_offset_ntt.rows, 1);

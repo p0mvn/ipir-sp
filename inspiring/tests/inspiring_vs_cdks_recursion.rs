@@ -81,8 +81,8 @@ fn preprocessing_api_accepts_exactly_two_base_key_switching_matrices() {
     let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
         .expect("valid preprocessing");
 
-    assert_eq!(pre.kg.mat.rows, 2);
-    assert_eq!(pre.kh.mat.rows, 2);
-    assert_eq!(pre.kg_images_left.len(), params.d / 2 - 1);
-    assert_eq!(pre.kg_images_right.len(), params.d / 2 - 1);
+    assert_eq!(pre.collapse_a_final_ntt.rows, 1);
+    assert_eq!(pre.collapse_a_final_ntt.cols, 1);
+    assert_eq!(pre.collapse_b_offset_ntt.rows, 1);
+    assert_eq!(pre.collapse_b_offset_ntt.cols, 1);
 }

@@ -55,9 +55,11 @@ from typing import Literal
 
 from inspiring_oracle import key_switching
 from inspiring_oracle.automorph import G, h
+from inspiring_oracle.intermediate import IRCtx
 from inspiring_oracle.key_switching import KeySwitchingMatrix
 from inspiring_oracle.params import RlweParams
 from inspiring_oracle.ring import add
+from inspiring_oracle.rlwe import RlweCiphertext
 
 # Selector for the "rho" automorphism in CollapseHalf (SPEC.md section 6).
 # "identity" -> rho is the identity (used for the LEFT half of an aggregated
@@ -200,3 +202,72 @@ def collapse_half(
     # Unwrap to expose the single remaining secret share.
     assert len(cur_a) == 1, f"expected length-1 result, got len {len(cur_a)}"
     return cur_a[0], cur_b
+
+
+def collapse(
+    ictx_agg: IRCtx,
+    K_g: KeySwitchingMatrix,
+    K_h: KeySwitchingMatrix,
+    params: RlweParams,
+) -> RlweCiphertext:
+    """Stage 3 of Algorithm 1 (SPEC.md section 6) -- the top-level collapse.
+
+    Combines the two halves of an aggregated IRCtx and folds them into a
+    single honest two-element RLWE ciphertext under the base secret
+    ``s_tilde``.
+
+    Per SPEC.md section 6::
+
+        COLLAPSE((a_hat_agg, b_tilde_agg), K_g, K_h) -> (c_1, c_2):
+            a_left  := a_hat_agg[0 : d/2]
+            a_right := a_hat_agg[d/2 : d]
+            (a_1, b_1) := COLLAPSEHALF((a_left,  b_tilde_agg), K_g, identity)
+            (a_2, b_2) := COLLAPSEHALF((a_right, b_1        ), K_g, tau_h)
+            (c_1, c_2) := COLLAPSEONE(([a_1, a_2], b_2), K_h)
+            return RlweCiphertext(c_1, c_2)
+
+    Total ``KS.Switch`` invocations: ``(d/2 - 1) + (d/2 - 1) + 1 = d - 1``.
+    **This count is the central design distinction of InspiRING vs CDKS**
+    (CDKS would use ``(d - 1) * log d`` for the same packing) and is
+    pinned down at runtime by ``test_collapse.py::TestSwitchCallCount``.
+
+    Args:
+      ictx_agg: Output of ``intermediate.aggregate`` -- a single IRCtx
+        whose ``m_hat_agg`` polynomial encodes ``d`` plaintexts (one per
+        coefficient slot), encrypted under the wider secret ``s_hat``.
+      K_g: ``KS.Setup(tau_g(s_tilde), s_tilde, params, rng)``. Used by
+        both halves' ``collapse_half`` calls (offline-generated once).
+      K_h: ``KS.Setup(tau_h(s_tilde), s_tilde, params, rng)``. Used only
+        by the final fold step.
+      params: Ring parameters.
+
+    Returns:
+      ``RlweCiphertext(c_1, c_2)`` encrypting ``m_hat_agg + e_total``
+      under ``s_tilde`` -- ready for ``rlwe.decrypt``.
+
+    The "subtle but important" trick (SPEC.md section 6): the second
+    ``collapse_half`` is invoked with ``b_1`` (the running ``b`` from the
+    first half) as its starting ``b``, NOT with ``b_tilde_agg`` again.
+    This is correct because the message and accumulated noise are all
+    carried in the running ``b``; the right half only needs to undo its
+    own ``-<a_right, s_hat_right>`` masking.
+    """
+    d = params.d
+    half = d // 2
+
+    a_left = list(ictx_agg.a_hat[:half])
+    a_right = list(ictx_agg.a_hat[half:])
+
+    # Left half: folds tau_g^j(s_tilde) shares down to s_tilde.
+    a_1, b_1 = collapse_half(a_left, ictx_agg.b_tilde, K_g, "identity", params)
+
+    # Right half: folds tau_h(tau_g^j(s_tilde)) down to tau_h(s_tilde).
+    # NOTE the b_1 (not b_tilde_agg!) -- the running b carries everything.
+    a_2, b_2 = collapse_half(a_right, b_1, K_g, "tau_h", params)
+
+    # Final fold: collapse the (s_tilde, tau_h(s_tilde)) wider ciphertext
+    # via K_h. After this single collapse_one, the result is under s_tilde
+    # alone.
+    a_pair = [a_1, a_2]
+    a_fin_list, b_fin = collapse_one(a_pair, b_2, K_h, params)
+    return RlweCiphertext(c1=a_fin_list[0], c2=b_fin)

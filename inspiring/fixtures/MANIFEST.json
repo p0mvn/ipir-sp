@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "file": "tiny_random_seed_42.json",
+      "name": "tiny_random_seed_42",
+      "description": "ORACLE_TINY (d=8) with random messages and seed 42.",
+      "params_preset": "ORACLE_TINY"
+    },
+    {
+      "file": "tiny_all_zero.json",
+      "name": "tiny_all_zero",
+      "description": "ORACLE_TINY with all-zero messages -- noise-only output.",
+      "params_preset": "ORACLE_TINY"
+    },
+    {
+      "file": "tiny_all_max.json",
+      "name": "tiny_all_max",
+      "description": "ORACLE_TINY with messages = p - 1 in every slot.",
+      "params_preset": "ORACLE_TINY"
+    },
+    {
+      "file": "tiny_single_one_at_3.json",
+      "name": "tiny_single_one_at_3",
+      "description": "ORACLE_TINY with only slot 3 nonzero (p - 1).",
+      "params_preset": "ORACLE_TINY"
+    },
+    {
+      "file": "small_random_seed_42.json",
+      "name": "small_random_seed_42",
+      "description": "ORACLE_SMALL (d=16) with random messages and seed 42.",
+      "params_preset": "ORACLE_SMALL"
+    },
+    {
+      "file": "small_random_seed_1337.json",
+      "name": "small_random_seed_1337",
+      "description": "ORACLE_SMALL with a different random message set.",
+      "params_preset": "ORACLE_SMALL"
+    },
+    {
+      "file": "small_all_zero.json",
+      "name": "small_all_zero",
+      "description": "ORACLE_SMALL with all-zero messages.",
+      "params_preset": "ORACLE_SMALL"
+    },
+    {
+      "file": "small_all_max.json",
+      "name": "small_all_max",
+      "description": "ORACLE_SMALL with messages = p - 1 in every slot.",
+      "params_preset": "ORACLE_SMALL"
+    },
+    {
+      "file": "small_single_one_at_15.json",
+      "name": "small_single_one_at_15",
+      "description": "ORACLE_SMALL with only the highest slot nonzero.",
+      "params_preset": "ORACLE_SMALL"
+    }
+  ]
+}

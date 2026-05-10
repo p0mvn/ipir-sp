@@ -14,9 +14,12 @@
 
 ORACLE_DIR := tools/python-oracle
 
+FIXTURES_DIR := fixtures
+
 .DEFAULT_GOAL := help
 .PHONY: help \
         oracle-sync oracle-test oracle-test-stage oracle-test-fast oracle-clean \
+        oracle-fixtures \
         test sync clean
 
 help: ## Show this help
@@ -54,6 +57,9 @@ oracle-test-stage: oracle-sync ## Run one stage's tests; usage: make oracle-test
 	  exit 1; \
 	fi
 	cd $(ORACLE_DIR) && uv run pytest -v tests/test_$(STAGE).py
+
+oracle-fixtures: oracle-sync ## Regenerate JSON fixtures into ./fixtures/ for the Rust crate
+	cd $(ORACLE_DIR) && uv run python scripts/generate_fixtures.py --output ../../$(FIXTURES_DIR)
 
 oracle-clean: ## Remove Python oracle build/test artifacts
 	rm -rf $(ORACLE_DIR)/.pytest_cache $(ORACLE_DIR)/.hypothesis

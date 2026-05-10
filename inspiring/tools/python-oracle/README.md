@@ -33,10 +33,15 @@ the per-stage breakdown.
 | 9     | `aggregate`                          | done   |
 | 10    | `collapse_one`                       | done   |
 | 11    | `collapse_half`                      | done   |
-| 12    | `collapse` (full)                    | todo   |
-| 13    | `pack` (Algorithm 1)                 | todo   |
-| 14    | Empirical Theorem 2 noise check      | todo   |
-| 15    | JSON fixture generation              | todo   |
+| 12    | `collapse` (full)                    | done   |
+| 13    | `pack` (Algorithm 1)                 | done   |
+| 14    | Empirical Theorem 2 noise check      | done   |
+| 15    | JSON fixture generation              | done   |
+
+**Phase 2 status**: complete. 534 tests pass under `make oracle-test`.
+Generated fixtures live at [`../../fixtures/`](../../fixtures/) and are
+checked into the repo as the cross-language contract for the future
+Rust crate.
 
 ## Quickstart
 
@@ -54,8 +59,16 @@ uv run pytest -v tests/test_params.py        # one stage at a time
 To regenerate the JSON fixtures consumed by the Rust crate (Stage 15):
 
 ```bash
-uv run python scripts/generate_fixtures.py --output ../../tests/fixtures/
+make oracle-fixtures               # writes to ../../fixtures/ from repo root
+# or directly:
+uv run python scripts/generate_fixtures.py --output ../../fixtures/
 ```
+
+The generated set lives at [`inspiring/fixtures/`](../../fixtures/) and
+contains a `MANIFEST.json` plus one self-contained JSON per fixture
+(see `inspiring_oracle/fixtures.py` for the schema). Each fixture
+captures every intermediate of one full `pack` execution so the Rust
+crate can assert byte-equality on every stage boundary.
 
 ## Parameter presets
 
@@ -112,4 +125,16 @@ tools/python-oracle/
 |   `-- test_noise.py      # Stage 14
 `-- scripts/
     `-- generate_fixtures.py # Stage 15
+
+inspiring/fixtures/                  # generated JSON fixtures (committed)
+|-- MANIFEST.json
+|-- tiny_random_seed_42.json
+|-- tiny_all_zero.json
+|-- tiny_all_max.json
+|-- tiny_single_one_at_3.json
+|-- small_random_seed_42.json
+|-- small_random_seed_1337.json
+|-- small_all_zero.json
+|-- small_all_max.json
+`-- small_single_one_at_15.json
 ```

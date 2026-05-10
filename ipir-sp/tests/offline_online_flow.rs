@@ -1,11 +1,11 @@
 use inspiring::key_switching::ks_call_count;
 use inspiring::{GadgetParams, RlweParams};
-use rand_chacha::rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
-use ipir_sp::client::{generate_ks_pairs, ClientSecret};
+use ipir_sp::client::{generate_ks_pairs, ClientSecret, IPIRClient};
 use ipir_sp::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
 use ipir_sp::server::{build_pack_preprocessed_blocks, offline_precompute_from_hint, YServer};
 use ipir_sp::YpirSchemeParams;
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 
 fn tiny_rlwe() -> RlweParams {
     RlweParams::new(
@@ -328,5 +328,36 @@ fn encrypted_pir_query_decodes_exact_expected_row_bytes() {
     }
 
     let expected = db_bytes[target_row * ypir.db_cols..(target_row + 1) * ypir.db_cols].to_vec();
+    assert_eq!(decoded, expected);
+}
+
+#[test]
+fn ipir_client_facade_matches_server_full_online_shape() {
+    let rlwe = tiny_rlwe();
+    let mut ypir = tiny_ypir_two_outputs();
+    ypir.num_items = 8;
+    ypir.db_rows = 8;
+    ypir.q_prime_1 = rlwe.q;
+    ypir.q_prime_2 = rlwe.q;
+
+    let db_values: Vec<u64> = (0..ypir.db_rows)
+        .flat_map(|row| (0..ypir.db_cols).map(move |col| ((row + col * 3) % 4) as u64))
+        .collect();
+    let server = YServer::new(ypir.clone(), db_values.clone().into_iter(), false, true);
+    let client = IPIRClient::new(&rlwe, &ypir);
+    let setup = client.generate_setup_simplepir_from_seed([9u8; 32]);
+    let offline =
+        server.perform_offline_precomputation_simplepir(&rlwe, &setup.offline_query_polys);
+    let (query, client_seed) = client.generate_query_simplepir(&setup, 6);
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, setup.key_pairs)
+        .expect("preprocessing builds from facade setup");
+
+    let response = server
+        .perform_full_online_computation_simplepir(&rlwe, &query.to_bytes(), &pre)
+        .expect("full online response");
+    let decoded = client.decode_response_simplepir_raw(client_seed, &response);
+    let expected = db_values[6 * ypir.db_cols..7 * ypir.db_cols].to_vec();
+
+    assert_eq!(query.as_slice().len(), ypir.db_rows);
     assert_eq!(decoded, expected);
 }

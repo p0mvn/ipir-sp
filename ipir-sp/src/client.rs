@@ -7,9 +7,17 @@
 use inspiring::automorph::{h, tau_g_pow, tau_ntt};
 use inspiring::key_switching::{ks_setup, KeySwitchingMatrix};
 use inspiring::RlweParams;
-use rand::Rng;
+use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use spiral_rs::poly::{to_ntt_alloc, PolyMatrix, PolyMatrixRaw};
+
+use crate::bits::u64s_to_contiguous_bytes;
+use crate::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
+use crate::params::{params_for_simplepir, YpirSchemeParams};
+use crate::serialize::{deserialize_u64s_le, serialize_u64s_le};
+
+/// Seed used to regenerate IPIR client secret material.
+pub type IPIRSeed = [u8; 32];
 
 /// A client secret in coefficient form.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +100,270 @@ pub fn generate_ks_pairs<'a>(
     (0..count)
         .map(|_| generate_ks_pair(params, secret, rng))
         .collect()
+}
+
+/// High-level IPIR client facade with a YPIR-shaped API.
+#[derive(Debug, Clone)]
+pub struct IPIRClient {
+    rlwe: RlweParams,
+    ypir: YpirSchemeParams,
+}
+
+/// Client-generated setup material consumed by the server's offline phase.
+pub struct IPIRSimpleSetup<'a> {
+    /// Seed used to regenerate the client secret for online query generation and decoding.
+    pub client_seed: IPIRSeed,
+    /// Offline query polynomials, one per `d`-row database block.
+    pub offline_query_polys: Vec<Vec<u64>>,
+    /// One `(K_g, K_h)` key-switching pair per response RLWE block.
+    pub key_pairs: Vec<(KeySwitchingMatrix<'a>, KeySwitchingMatrix<'a>)>,
+}
+
+/// Online SimplePIR first-dimension query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IPIRSimpleQuery {
+    first_dim: Vec<u64>,
+}
+
+impl IPIRSimpleQuery {
+    /// Build a query from first-dimension coefficients.
+    #[must_use]
+    pub fn new(first_dim: Vec<u64>) -> Self {
+        Self { first_dim }
+    }
+
+    /// Return the first-dimension query coefficients.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u64] {
+        &self.first_dim
+    }
+
+    /// Serialize as little-endian `u64` coefficients, matching the `/query` body.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serialize_u64s_le(&self.first_dim)
+    }
+
+    /// Parse a query serialized by [`Self::to_bytes`].
+    pub fn from_bytes(data: &[u8]) -> Result<Self, inspiring::InspiringError> {
+        deserialize_u64s_le(data).map(Self::new)
+    }
+}
+
+impl IPIRClient {
+    /// Build a client from explicit IPIR-SP parameters.
+    #[must_use]
+    pub fn new(rlwe: &RlweParams, ypir: &YpirSchemeParams) -> Self {
+        Self {
+            rlwe: rlwe.clone(),
+            ypir: ypir.clone(),
+        }
+    }
+
+    /// Build a client from database shape, mirroring `ypir::YPIRClient::from_db_sz`.
+    #[must_use]
+    pub fn from_db_sz(num_items: u64, item_size_bits: u64) -> Self {
+        let (rlwe, ypir) =
+            params_for_simplepir(num_items, item_size_bits).expect("valid SimplePIR parameters");
+        Self { rlwe, ypir }
+    }
+
+    /// Return the RLWE parameters used by the packing layer.
+    #[must_use]
+    pub fn rlwe_params(&self) -> &RlweParams {
+        &self.rlwe
+    }
+
+    /// Return the YPIR-shaped scheme parameters used by the database and transport layers.
+    #[must_use]
+    pub fn params(&self) -> &YpirSchemeParams {
+        &self.ypir
+    }
+
+    /// Generate setup material with a fresh random seed.
+    pub fn generate_setup_simplepir(&self) -> IPIRSimpleSetup<'_> {
+        let mut seed = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        self.generate_setup_simplepir_from_seed(seed)
+    }
+
+    /// Generate setup material deterministically from `client_seed`.
+    pub fn generate_setup_simplepir_from_seed(&self, client_seed: IPIRSeed) -> IPIRSimpleSetup<'_> {
+        assert_eq!(
+            self.ypir.db_rows % self.rlwe.d,
+            0,
+            "db rows must split into d-row blocks"
+        );
+        assert_eq!(
+            self.ypir.db_cols % self.rlwe.d,
+            0,
+            "db cols must split into RLWE output blocks"
+        );
+
+        let mut rng = ChaCha20Rng::from_seed(client_seed);
+        let secret = ClientSecret::sample_ternary(&self.rlwe, &mut rng);
+        let offline_query_polys = (0..self.ypir.db_rows / self.rlwe.d)
+            .map(|_| {
+                (0..self.rlwe.d)
+                    .map(|_| rng.gen_range(0..self.rlwe.q))
+                    .collect()
+            })
+            .collect();
+        let key_pairs = generate_ks_pairs(
+            &self.rlwe,
+            &secret,
+            self.ypir.db_cols / self.rlwe.d,
+            &mut rng,
+        );
+
+        IPIRSimpleSetup {
+            client_seed,
+            offline_query_polys,
+            key_pairs,
+        }
+    }
+
+    /// Generate an online SimplePIR query for `target_row`.
+    pub fn generate_query_simplepir(
+        &self,
+        setup: &IPIRSimpleSetup<'_>,
+        target_row: usize,
+    ) -> (IPIRSimpleQuery, IPIRSeed) {
+        assert!(target_row < self.ypir.db_rows, "target row out of bounds");
+        assert_eq!(
+            setup.offline_query_polys.len(),
+            self.ypir.db_rows / self.rlwe.d,
+            "setup offline query count does not match params"
+        );
+
+        let secret = self.secret_from_seed(setup.client_seed);
+        let first_dim = encrypted_selection_query(
+            &self.rlwe,
+            &setup.offline_query_polys,
+            &secret.coeffs,
+            target_row,
+            self.ypir.db_rows,
+        );
+
+        (IPIRSimpleQuery::new(first_dim), setup.client_seed)
+    }
+
+    /// Decode serialized response bytes into contiguous plaintext bytes.
+    #[must_use]
+    pub fn decode_response_simplepir(&self, client_seed: IPIRSeed, response: &[u8]) -> Vec<u8> {
+        let decoded = self.decode_response_simplepir_raw(client_seed, response);
+        u64s_to_contiguous_bytes(&decoded, plaintext_modulus_bits(self.rlwe.p))
+    }
+
+    /// Decode serialized response bytes into plaintext coefficients.
+    #[must_use]
+    pub fn decode_response_simplepir_raw(
+        &self,
+        client_seed: IPIRSeed,
+        response: &[u8],
+    ) -> Vec<u64> {
+        let response_len =
+            switched_rlwe_response_len(self.rlwe.d, self.ypir.q_prime_1, self.ypir.q_prime_2);
+        let expected_len = (self.ypir.db_cols / self.rlwe.d) * response_len;
+        assert_eq!(
+            response.len(),
+            expected_len,
+            "serialized response length mismatch"
+        );
+
+        let secret = self.secret_from_seed(client_seed);
+        let mut decoded = Vec::with_capacity(self.ypir.db_cols);
+        for chunk in response.chunks_exact(response_len) {
+            let (row_0, row_1) = recover_rlwe_rows(
+                chunk,
+                self.rlwe.d,
+                self.ypir.q_prime_1,
+                self.ypir.q_prime_2,
+                self.rlwe.q,
+            );
+            decoded.extend(decode_rows(&self.rlwe, &row_0, &row_1, &secret.coeffs));
+        }
+        decoded
+    }
+
+    fn secret_from_seed(&self, client_seed: IPIRSeed) -> ClientSecret {
+        let mut rng = ChaCha20Rng::from_seed(client_seed);
+        ClientSecret::sample_ternary(&self.rlwe, &mut rng)
+    }
+}
+
+fn encrypted_selection_query(
+    params: &RlweParams,
+    offline_query: &[Vec<u64>],
+    secret: &[u64],
+    target_row: usize,
+    db_rows: usize,
+) -> Vec<u64> {
+    assert_eq!(db_rows % params.d, 0);
+    assert_eq!(offline_query.len(), db_rows / params.d);
+
+    let mut query = vec![0u64; db_rows];
+    for (block_idx, query_poly) in offline_query.iter().enumerate() {
+        for coeff_idx in 0..params.d {
+            let mut basis = vec![0u64; params.d];
+            basis[coeff_idx] = 1;
+            let a_row = negacyclic_mul_mod(query_poly, &basis, params.q);
+            let inner = a_row.iter().zip(secret).fold(0u64, |acc, (a, s)| {
+                ((u128::from(acc) + u128::from(*a) * u128::from(*s)) % u128::from(params.q)) as u64
+            });
+            let row = block_idx * params.d + coeff_idx;
+            let encoded_selection = if row == target_row { params.delta } else { 0 };
+            query[row] = (params.q + encoded_selection - inner) % params.q;
+        }
+    }
+
+    query
+}
+
+fn decode_rows(params: &RlweParams, row_0: &[u64], row_1: &[u64], secret: &[u64]) -> Vec<u64> {
+    let phase = add_poly_mod(
+        row_1,
+        &negacyclic_mul_mod(row_0, secret, params.q),
+        params.q,
+    );
+    phase
+        .iter()
+        .map(|coeff| ((coeff + params.delta / 2) / params.delta) % params.p)
+        .collect()
+}
+
+fn add_poly_mod(lhs: &[u64], rhs: &[u64], modulus: u64) -> Vec<u64> {
+    lhs.iter()
+        .zip(rhs)
+        .map(|(x, y)| ((u128::from(*x) + u128::from(*y)) % u128::from(modulus)) as u64)
+        .collect()
+}
+
+fn negacyclic_mul_mod(left: &[u64], right: &[u64], modulus: u64) -> Vec<u64> {
+    assert_eq!(left.len(), right.len());
+    let degree = left.len();
+    let mut out = vec![0u64; degree];
+
+    for (i, left_coeff) in left.iter().enumerate() {
+        for (j, right_coeff) in right.iter().enumerate() {
+            let product = (*left_coeff as u128 * *right_coeff as u128) % modulus as u128;
+            let idx = i + j;
+            if idx < degree {
+                out[idx] = ((out[idx] as u128 + product) % modulus as u128) as u64;
+            } else {
+                let wrapped = idx - degree;
+                out[wrapped] =
+                    ((out[wrapped] as u128 + modulus as u128 - product) % modulus as u128) as u64;
+            }
+        }
+    }
+
+    out
+}
+
+fn plaintext_modulus_bits(modulus: u64) -> usize {
+    assert!(modulus > 1, "plaintext modulus must be at least 2");
+    (u64::BITS - (modulus - 1).leading_zeros()) as usize
 }
 
 #[cfg(test)]

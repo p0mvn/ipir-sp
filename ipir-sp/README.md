@@ -28,35 +28,69 @@ This crate is intentionally a glue layer:
 `valar-spiral-rs` fork. `ipir-sp` depends on `inspiring` by path and shares that
 same resolved backend.
 
+## YPIR-Shaped IPIR API
+
+The high-level API uses `IPIR*` names while following the shape of YPIR's
+client/server flow:
+
+- `IPIRClient::from_db_sz` derives the same SimplePIR scenario shape as YPIR.
+- `IPIRClient::generate_setup_simplepir` creates IPIR-SP setup material:
+  offline query polynomials plus `(K_g, K_h)` key-switching pairs.
+- `IPIRClient::generate_query_simplepir` returns an `IPIRSimpleQuery`; call
+  `query.to_bytes()` for the raw `/query` body.
+- `YServer::perform_full_online_computation_simplepir` parses those query bytes
+  and returns serialized response bytes.
+- `IPIRClient::decode_response_simplepir` decodes the response with the returned
+  client seed.
+
+Unlike YPIR's CDKS path, the IPIR-SP `/query` body is only the online
+first-dimension query. Key material is handled during setup/precomputation, not
+embedded as `pack_pub_params` bytes in every online request.
+
 ## Basic Flow
 
 ```rust
-use rand_chacha::rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
-use ipir_sp::client::{generate_ks_pairs, ClientSecret};
+use ipir_sp::client::IPIRClient;
 use ipir_sp::server::{build_pack_preprocessed_blocks, YServer};
 use ipir_sp::params_for_simplepir;
 
 let (rlwe, ypir) = params_for_simplepir(1 << 14, 16_384 * 8)?;
 let db = vec![0u16; ypir.db_rows * ypir.db_cols];
 let server = YServer::new(ypir.clone(), db.into_iter(), false, true);
+let client = IPIRClient::new(&rlwe, &ypir);
 
-let secret = ClientSecret::sample_ternary(&rlwe, &mut ChaCha20Rng::seed_from_u64(7));
-let offline_query = vec![vec![0; rlwe.d]; ypir.db_rows / rlwe.d];
-let offline = server.perform_offline_precomputation_simplepir(&rlwe, &offline_query);
-
-let mut rng = ChaCha20Rng::seed_from_u64(8);
-let key_pairs = generate_ks_pairs(&rlwe, &secret, offline.crs_blocks.len(), &mut rng);
-let preprocessed = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)?;
-
-let first_dim_query = vec![0; ypir.db_rows];
-let response = server.perform_online_computation_simplepir(
+let setup = client.generate_setup_simplepir();
+let offline = server.perform_offline_precomputation_simplepir(
     &rlwe,
-    &first_dim_query,
+    &setup.offline_query_polys,
+);
+let (query, client_seed) = client.generate_query_simplepir(&setup, 0);
+let preprocessed = build_pack_preprocessed_blocks(
+    &rlwe,
+    &offline.crs_blocks,
+    setup.key_pairs,
+)?;
+
+let response = server.perform_full_online_computation_simplepir(
+    &rlwe,
+    &query.to_bytes(),
     &preprocessed,
 )?;
+let _item = client.decode_response_simplepir(client_seed, &response);
 # Ok::<(), inspiring::InspiringError>(())
 ```
+
+## HTTP Shape
+
+Feature-gated demo binaries mirror YPIR's raw `POST /query` transport:
+
+```bash
+cargo run -p ipir-sp --features http_server --bin server -- 16384 131072
+cargo run -p ipir-sp --features http_client --bin client -- 0 16384 131072
+```
+
+Use the same `--setup-seed` on both commands so the client query matches the
+server's precomputed setup.
 
 ## Tests And Benchmarks
 

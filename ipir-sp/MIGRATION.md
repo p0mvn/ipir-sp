@@ -22,13 +22,21 @@ InspiRING modulus rather than from two CRT limbs.
 Use `ipir_sp::params_for_simplepir(num_items, item_size_bits)`. It returns both
 the `inspiring::RlweParams` used by the packing layer and the
 `YpirSchemeParams` values retained for database shape and transport.
+For a client facade similar to YPIR's `YPIRClient`, use
+`ipir_sp::client::IPIRClient` or the crate-level `ipir_sp::IPIRClient` re-export.
 
 `raw_generate_expansion_params`
 
 Use `ipir_sp::client::generate_ks_pair` for one `(K_g, K_h)` pair or
 `ipir_sp::client::generate_ks_pairs` when building several preprocessing
 blocks. The uploaded key material is serialized with
-`ipir_sp::serialize::serialize_ks_pair`.
+`ipir_sp::serialize::serialize_ks_pair` and parsed with
+`ipir_sp::serialize::deserialize_ks_pair`.
+
+For the high-level path, call `IPIRClient::generate_setup_simplepir` or
+`IPIRClient::generate_setup_simplepir_from_seed`. The returned
+`IPIRSimpleSetup` contains the offline query polynomials and key-switching pairs
+needed by the server precompute step.
 
 `pack_pub_params`
 
@@ -75,6 +83,13 @@ Use `YServer::perform_online_computation_simplepir`. It runs the SimplePIR
 matrix product, packs each intermediate block with InspiRING, and returns
 serialized response bytes.
 
+For YPIR-style raw request bytes, use
+`YServer::perform_full_online_computation_simplepir`. Its request body is
+`IPIRSimpleQuery::to_bytes()`: little-endian `u64` first-dimension query values.
+This intentionally differs from YPIR's `first_dim || pack_pub_params` body
+because IPIR-SP handles `(K_g, K_h)` key material during setup/precomputation
+rather than uploading CDKS expansion parameters with every online request.
+
 `modulus_switch` helpers for two CRT limbs
 
 Use `ipir_sp::modulus_switch::switch_rlwe_ciphertext` or
@@ -92,6 +107,9 @@ Do not apply YPIR's extra `poly_len` multiplier to packed `b` values when
 decoding `ipir-sp` responses. InspiRING absorbs the relevant `d^-1` scaling
 inside its transform, so applying the old multiplier would double-scale the
 message.
+
+Use `IPIRClient::decode_response_simplepir` for plaintext bytes or
+`IPIRClient::decode_response_simplepir_raw` for plaintext coefficients.
 
 ## Validation Checklist
 

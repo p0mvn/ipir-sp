@@ -13,6 +13,7 @@ use spiral_rs::poly::{to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw};
 
 use crate::modulus_switch::serialize_rlwe_response;
 use crate::params::YpirSchemeParams;
+use crate::serialize::deserialize_u64s_le;
 
 /// Scalar types accepted by the SimplePIR database.
 pub trait ToU64 {
@@ -261,7 +262,29 @@ where
             self.params.q_prime_2,
         ))
     }
+
+    /// Parse a raw `/query` body and perform the SimplePIR online server path.
+    pub fn perform_full_online_computation_simplepir<'a>(
+        &self,
+        rlwe: &RlweParams,
+        query: &[u8],
+        preprocessed: &'a [PackPreprocessed<'a>],
+    ) -> Result<Vec<u8>, InspiringError> {
+        let first_dim_query = deserialize_u64s_le(query)?;
+        if first_dim_query.len() != self.db_rows_padded() {
+            return Err(InspiringError::LweShape(format!(
+                "expected {} first-dimension query values, got {}",
+                self.db_rows_padded(),
+                first_dim_query.len()
+            )));
+        }
+
+        self.perform_online_computation_simplepir(rlwe, &first_dim_query, preprocessed)
+    }
 }
+
+/// IPIR-named alias for the YPIR-shaped server database.
+pub type IPIRServer<T> = YServer<T>;
 
 fn add_assign_mod(out: &mut [u64], rhs: &[u64], modulus: u64) {
     assert_eq!(out.len(), rhs.len());

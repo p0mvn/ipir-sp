@@ -19,9 +19,6 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use rand_chacha::rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
-use spiral_rs::poly::{from_ntt_alloc, PolyMatrix};
 use ipir_sp::client::{generate_ks_pairs, ClientSecret};
 use ipir_sp::modulus_switch::{serialize_rlwe_response, switched_rlwe_response_len};
 use ipir_sp::params::{
@@ -32,6 +29,9 @@ use ipir_sp::server::{
     build_pack_preprocessed_blocks, offline_precompute_from_hint, pack_intermediate_blocks,
 };
 use ipir_sp::YpirSchemeParams;
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use spiral_rs::poly::{from_ntt_alloc, PolyMatrix};
 
 use inspiring::{GadgetParams, PackPreprocessed, RlweParams};
 

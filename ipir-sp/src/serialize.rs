@@ -7,7 +7,7 @@
 
 use inspiring::key_switching::KeySwitchingMatrix;
 use inspiring::{InspiringError, RlweParams};
-use spiral_rs::poly::PolyMatrix;
+use spiral_rs::poly::{PolyMatrix, PolyMatrixNTT};
 
 /// Number of bytes used by one serialized `(K_g, K_h)` pair.
 #[must_use]
@@ -28,6 +28,53 @@ pub fn serialize_ks_pair(
     write_u64s_le(&mut out, kg.mat.as_slice());
     write_u64s_le(&mut out, kh.mat.as_slice());
     Ok(out)
+}
+
+/// Deserialize one uploaded `(K_g, K_h)` key-switching pair.
+pub fn deserialize_ks_pair<'a>(
+    params: &'a RlweParams,
+    data: &[u8],
+) -> Result<(KeySwitchingMatrix<'a>, KeySwitchingMatrix<'a>), InspiringError> {
+    if data.len() != serialized_ks_pair_len(params) {
+        return Err(InspiringError::PreprocessMismatch(format!(
+            "serialized key pair must be {} bytes, got {}",
+            serialized_ks_pair_len(params),
+            data.len()
+        )));
+    }
+
+    let coeffs = deserialize_u64s_le(data)?;
+    let key_len = key_matrix_u64_len(params);
+    let kg = key_from_coeffs(params, &coeffs[..key_len], "K_g")?;
+    let kh = key_from_coeffs(params, &coeffs[key_len..], "K_h")?;
+    Ok((kg, kh))
+}
+
+/// Serialize a sequence of `u64` values as little-endian bytes.
+#[must_use]
+pub fn serialize_u64s_le(data: &[u64]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() * std::mem::size_of::<u64>());
+    write_u64s_le(&mut out, data);
+    out
+}
+
+/// Deserialize little-endian `u64` bytes.
+pub fn deserialize_u64s_le(data: &[u8]) -> Result<Vec<u64>, InspiringError> {
+    if data.len() % std::mem::size_of::<u64>() != 0 {
+        return Err(InspiringError::PreprocessMismatch(format!(
+            "u64 byte stream length must be a multiple of 8, got {}",
+            data.len()
+        )));
+    }
+
+    Ok(data
+        .chunks_exact(std::mem::size_of::<u64>())
+        .map(|chunk| {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(chunk);
+            u64::from_le_bytes(bytes)
+        })
+        .collect())
 }
 
 fn key_matrix_u64_len(params: &RlweParams) -> usize {
@@ -65,6 +112,26 @@ fn validate_ks_matrix(
     }
 
     Ok(())
+}
+
+fn key_from_coeffs<'a>(
+    params: &'a RlweParams,
+    coeffs: &[u64],
+    label: &'static str,
+) -> Result<KeySwitchingMatrix<'a>, InspiringError> {
+    if coeffs.len() != key_matrix_u64_len(params) {
+        return Err(InspiringError::PreprocessMismatch(format!(
+            "{label} coefficient length must be {}, got {}",
+            key_matrix_u64_len(params),
+            coeffs.len()
+        )));
+    }
+
+    let mut mat = PolyMatrixNTT::zero(&params.spiral, 2, params.gadget.ell);
+    mat.as_mut_slice().copy_from_slice(coeffs);
+    let key = KeySwitchingMatrix { mat, params };
+    validate_ks_matrix(params, &key, label)?;
+    Ok(key)
 }
 
 fn write_u64s_le(out: &mut Vec<u8>, data: &[u64]) {
@@ -149,6 +216,27 @@ mod tests {
 
         assert!(bytes[..kg_len].iter().all(|byte| *byte == 0));
         assert_eq!(&bytes[kg_len..kg_len + 8], &42u64.to_le_bytes());
+    }
+
+    #[test]
+    fn deserialize_ks_pair_roundtrips_serialized_pair() {
+        let params = params();
+        let secret = secret(&params);
+        let mut rng = ChaCha20Rng::seed_from_u64(0x5153);
+        let (kg, kh) = generate_ks_pair(&params, &secret, &mut rng);
+        let bytes = serialize_ks_pair(&params, &kg, &kh).expect("serialize");
+
+        let (kg2, kh2) = deserialize_ks_pair(&params, &bytes).expect("deserialize");
+
+        assert_eq!(kg.mat.as_slice(), kg2.mat.as_slice());
+        assert_eq!(kh.mat.as_slice(), kh2.mat.as_slice());
+    }
+
+    #[test]
+    fn deserialize_u64s_le_rejects_truncated_value() {
+        let err = deserialize_u64s_le(&[1, 2, 3]).expect_err("truncated u64 must fail");
+
+        assert!(matches!(err, InspiringError::PreprocessMismatch(_)));
     }
 
     #[test]

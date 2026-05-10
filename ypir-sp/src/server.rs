@@ -6,7 +6,9 @@
 //! InspiRING preprocessing.
 
 use inspiring::key_switching::KeySwitchingMatrix;
-use inspiring::{InspiringError, PackPreprocessed, RlweParams};
+use inspiring::{
+    pack, InspiringError, LweBatch, LweCiphertext, PackPreprocessed, RlweCiphertext, RlweParams,
+};
 use spiral_rs::poly::{to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw};
 
 use crate::params::YpirSchemeParams;
@@ -296,6 +298,63 @@ where
     Ok((offline, pre))
 }
 
+/// Pack online SimplePIR intermediate values into RLWE ciphertexts.
+///
+/// The CRS-side `a` vectors were already absorbed into [`PackPreprocessed`].
+/// `inspiring::pack` only reads online `b` scalars, so each constructed
+/// [`LweCiphertext`] carries a zero dummy `a` vector of the right shape.
+pub fn pack_intermediate_blocks<'a>(
+    intermediate: &[u64],
+    preprocessed: &'a [PackPreprocessed<'a>],
+) -> Result<Vec<RlweCiphertext<'a>>, InspiringError> {
+    let Some(first) = preprocessed.first() else {
+        return if intermediate.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(InspiringError::PreprocessMismatch(
+                "non-empty intermediate with no preprocessing blocks".to_string(),
+            ))
+        };
+    };
+
+    let params = first.params;
+    if intermediate.len() != preprocessed.len() * params.d {
+        return Err(InspiringError::LweShape(format!(
+            "expected {} intermediate values for {} blocks of d={}, got {}",
+            preprocessed.len() * params.d,
+            preprocessed.len(),
+            params.d,
+            intermediate.len()
+        )));
+    }
+
+    let mut out = Vec::with_capacity(preprocessed.len());
+    for (block_idx, (b_block, pre)) in intermediate
+        .chunks_exact(params.d)
+        .zip(preprocessed.iter())
+        .enumerate()
+    {
+        if pre.params.d != params.d || pre.params.q != params.q {
+            return Err(InspiringError::PreprocessMismatch(format!(
+                "preprocessing block {block_idx} uses mismatched RLWE parameters"
+            )));
+        }
+
+        let batch = LweBatch {
+            inner: b_block
+                .iter()
+                .map(|b| LweCiphertext {
+                    a: vec![0; params.d],
+                    b: *b,
+                })
+                .collect(),
+        };
+        out.push(pack(&batch, pre)?);
+    }
+
+    Ok(out)
+}
+
 /// Extract one `d x d` InspiRING CRS block from `hint_0`.
 ///
 /// `hint_0` is row-major as `hint_0[row * db_cols + col]`. For RLWE output
@@ -492,5 +551,44 @@ mod tests {
         };
 
         assert!(matches!(err, InspiringError::PreprocessMismatch(_)));
+    }
+
+    #[test]
+    fn pack_intermediate_blocks_routes_b_values_to_matching_rlwe_outputs() {
+        let rlwe = tiny_rlwe();
+        let ypir = tiny_ypir(4, 16);
+        let hint_0 = vec![0u64; rlwe.d * ypir.db_cols];
+        let offline = offline_precompute_from_hint(&rlwe, &ypir, hint_0);
+        let key_pairs = (0..offline.crs_blocks.len()).map(|_| (zero_ks(&rlwe), zero_ks(&rlwe)));
+        let pre =
+            build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs).expect("build");
+        let intermediate: Vec<_> = (0..ypir.db_cols).map(|idx| idx as u64 + 10).collect();
+
+        let packed = pack_intermediate_blocks(&intermediate, &pre).expect("pack");
+
+        assert_eq!(packed.len(), 2);
+        for (block_idx, ct) in packed.iter().enumerate() {
+            let raw = from_ntt_alloc(&ct.inner);
+            let expected = intermediate[block_idx * rlwe.d..(block_idx + 1) * rlwe.d].to_vec();
+            assert_eq!(raw.get_poly(1, 0), expected);
+        }
+    }
+
+    #[test]
+    fn pack_intermediate_blocks_rejects_wrong_intermediate_length() {
+        let rlwe = tiny_rlwe();
+        let block = CrsBlock {
+            rows: vec![vec![0; rlwe.d]; rlwe.d],
+        };
+        let pre =
+            build_pack_preprocessed_blocks(&rlwe, &[block], [(zero_ks(&rlwe), zero_ks(&rlwe))])
+                .expect("build");
+
+        let err = match pack_intermediate_blocks(&[1, 2, 3], &pre) {
+            Ok(_) => panic!("wrong intermediate length must fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, InspiringError::LweShape(_)));
     }
 }

@@ -11,11 +11,8 @@
 //! or `IPIR_SP_BENCH_FULL=1` to attempt the headline YPIR command shape:
 //! `cargo run --release -- 32768 131072`.
 //!
-//! The current `ipir-sp` crate intentionally keeps the SimplePIR matrix kernels
-//! scalar and portable. These benches therefore isolate the InspiRING packing
-//! boundary for the full target shape: CRS extraction + pack preprocessing, and
-//! online pack + single-CRT response serialization after SimplePIR has produced
-//! the intermediate `b` values.
+//! The SimplePIR first-dimension multiply is benchmarked separately from the
+//! InspiRING packing boundary so changes to the DB/query kernel are visible.
 
 use std::time::Duration;
 
@@ -32,6 +29,7 @@ use ipir_sp::server::{
 use ipir_sp::YpirSchemeParams;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use simplepir_kernel::{ChunkedSplitKernel, FirstDimKernel, ScalarKernel};
 use spiral_rs::poly::{from_ntt_alloc, PolyMatrix};
 
 use inspiring::{GadgetParams, PackPreprocessed, RlweParams};
@@ -63,6 +61,8 @@ struct BenchFixture<'a> {
     ypir: YpirSchemeParams,
     secret: ClientSecret,
     intermediate: Vec<u64>,
+    first_dim_db: Vec<u16>,
+    first_dim_query: Vec<u64>,
     preprocessed: Vec<PackPreprocessed<'a>>,
     noise_bits: u32,
 }
@@ -201,6 +201,21 @@ fn encrypted_fixture_material(
     (hint_0, intermediate, messages)
 }
 
+fn simplepir_multiply_fixture(rlwe: &RlweParams, ypir: &YpirSchemeParams) -> (Vec<u16>, Vec<u64>) {
+    let db = (0..ypir.db_cols)
+        .flat_map(|col| {
+            (0..ypir.db_rows).map(move |row| {
+                ((SEED + col as u64 * 1_000_003 + row as u64 * 65_537) % ypir.p) as u16
+            })
+        })
+        .collect();
+    let query = (0..ypir.db_rows)
+        .map(|row| (SEED + row as u64 * 4_294_967_291) % rlwe.q)
+        .collect();
+
+    (db, query)
+}
+
 fn build_preprocessed<'a>(
     rlwe: &'a RlweParams,
     ypir: &YpirSchemeParams,
@@ -244,6 +259,9 @@ fn build_fixture() -> BenchFixture<'static> {
     eprintln!("setup: generating deterministic fixture material");
     let (hint_0, intermediate, messages) = encrypted_fixture_material(rlwe, &ypir, &secret);
     eprintln!("setup: deterministic fixture material ready");
+    eprintln!("setup: generating SimplePIR multiply fixture");
+    let (first_dim_db, first_dim_query) = simplepir_multiply_fixture(rlwe, &ypir);
+    eprintln!("setup: SimplePIR multiply fixture ready");
     let preprocessed = build_preprocessed(rlwe, &ypir, &secret, hint_0);
     eprintln!("setup: checking deterministic noise");
     let noise = noise_inf_norm(rlwe, &secret, &intermediate, &messages, &preprocessed);
@@ -256,6 +274,8 @@ fn build_fixture() -> BenchFixture<'static> {
         ypir,
         secret,
         intermediate,
+        first_dim_db,
+        first_dim_query,
         preprocessed,
         noise_bits: log2_ceil(noise),
     }
@@ -369,6 +389,48 @@ fn bench_end_to_end(c: &mut Criterion) {
     let mut group = c.benchmark_group(fixture.name);
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function(
+        BenchmarkId::new(
+            "multiply_query_only_scalar",
+            format!("{}x{}", fixture.ypir.db_rows, fixture.ypir.db_cols),
+        ),
+        |b| {
+            let kernel = ScalarKernel;
+            let mut out = vec![0u64; fixture.ypir.db_cols];
+            b.iter(|| {
+                kernel.multiply_query(
+                    fixture.rlwe,
+                    black_box(&fixture.first_dim_db),
+                    fixture.ypir.db_rows,
+                    fixture.ypir.db_cols,
+                    black_box(&fixture.first_dim_query),
+                    black_box(&mut out),
+                );
+            });
+        },
+    );
+
+    group.bench_function(
+        BenchmarkId::new(
+            "multiply_query_only_chunked_split",
+            format!("{}x{}", fixture.ypir.db_rows, fixture.ypir.db_cols),
+        ),
+        |b| {
+            let kernel = ChunkedSplitKernel::default();
+            let mut out = vec![0u64; fixture.ypir.db_cols];
+            b.iter(|| {
+                kernel.multiply_query(
+                    fixture.rlwe,
+                    black_box(&fixture.first_dim_db),
+                    fixture.ypir.db_rows,
+                    fixture.ypir.db_cols,
+                    black_box(&fixture.first_dim_query),
+                    black_box(&mut out),
+                );
+            });
+        },
+    );
 
     group.bench_function(
         BenchmarkId::new("offline_crs_extract_and_preprocess", output_count),

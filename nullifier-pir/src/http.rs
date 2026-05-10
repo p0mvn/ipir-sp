@@ -1,6 +1,7 @@
 //! Actix HTTP surface for PIR queries.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use actix_cors::Cors;
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
@@ -9,6 +10,8 @@ use serde::Serialize;
 
 use crate::backend::PirBackend;
 use crate::snapshot::SnapshotMetadata;
+
+pub const SERVER_TIME_HEADER: &str = "x-nullifier-pir-server-time-us";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,12 +45,15 @@ async fn meta(data: web::Data<AppState>) -> impl Responder {
 
 #[post("/query")]
 async fn query(body: web::Bytes, data: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
+    let started = Instant::now();
     let response = data
         .backend
         .answer_query(&body)
         .map_err(actix_web::error::ErrorBadRequest)?;
+    let server_time_us = started.elapsed().as_micros().to_string();
     Ok(HttpResponse::Ok()
         .content_type("application/octet-stream")
+        .insert_header((SERVER_TIME_HEADER, server_time_us))
         .body(response))
 }
 

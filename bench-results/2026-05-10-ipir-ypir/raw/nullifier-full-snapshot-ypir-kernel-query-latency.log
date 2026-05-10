@@ -1,0 +1,67 @@
+Server:
+
+```bash
+target/release/nullifier-pir serve \
+  --snapshot-path data/nullifiers.bin \
+  --backend local-ipir \
+  --host 127.0.0.1 \
+  --port 8090 \
+  --setup-seed 7
+```
+
+The server was rebuilt after adding the `simplepir-kernel` default
+`ChunkedSplitKernel` path and after adding the `/query` response timing header
+`x-nullifier-pir-server-time-us`.
+
+Sample 1:
+
+```bash
+/usr/bin/time -f 'process_wall_s=%e' target/release/nullifier-pir query \
+  --server-url "http://127.0.0.1:8090" \
+  --snapshot-path "data/nullifiers.bin" \
+  --nullifier-hex "b3cdb97715d5e3dd624fc87906b9d13b4e4ec6a63989d989936f2504f0a1f706" \
+  --setup-seed 7
+```
+
+```text
+queried row 0 against 49925853 records and decoded 3584 bytes
+timing_us total_query=601768 client_query_gen=46086 http_post_round_trip=524163 server=517883 client_decode=31324
+existing nullifier b3cdb97715d5e3dd624fc87906b9d13b4e4ec6a63989d989936f2504f0a1f706 found at global index 0, row 0, offset 0 and verified through PIR
+process_wall_s=0.65
+```
+
+Sample 2:
+
+```bash
+/usr/bin/time -f 'process_wall_s=%e' target/release/nullifier-pir query \
+  --server-url "http://127.0.0.1:8090" \
+  --snapshot-path "data/nullifiers.bin" \
+  --nullifier-hex "4b4f13ad02a04d16e6efa83730751f53eead7dbf019e1632d937b8c8631d393e" \
+  --setup-seed 7
+```
+
+```text
+queried row 14628 against 49925853 records and decoded 3584 bytes
+timing_us total_query=595809 client_query_gen=45864 http_post_round_trip=523787 server=515472 client_decode=26062
+existing nullifier 4b4f13ad02a04d16e6efa83730751f53eead7dbf019e1632d937b8c8631d393e found at global index 1638400, row 14628, offset 64 and verified through PIR
+process_wall_s=0.67
+```
+
+Sample 3:
+
+```bash
+/usr/bin/time -f 'process_wall_s=%e' target/release/nullifier-pir query \
+  --server-url "http://127.0.0.1:8090" \
+  --snapshot-path "data/nullifiers.bin" \
+  --nullifier-hex "0000000000000000000000000000000000000000000000000000000000000000" \
+  --setup-seed 7 \
+  --expect-absent \
+  --absent-probe-row 0
+```
+
+```text
+queried row 0 against 49925853 records and decoded 3584 bytes
+timing_us total_query=599461 client_query_gen=45875 http_post_round_trip=527433 server=523124 client_decode=26046
+absent nullifier 0000000000000000000000000000000000000000000000000000000000000000 not found locally and not present in decoded row 0
+process_wall_s=1.17
+```

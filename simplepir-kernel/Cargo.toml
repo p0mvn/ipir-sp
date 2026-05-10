@@ -1,0 +1,14 @@
+[package]
+name = "simplepir-kernel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT OR Apache-2.0"
+description = "Backend-agnostic SimplePIR first-dimension kernels."
+
+[dependencies]
+inspiring = { path = "../inspiring" }
+
+[dev-dependencies]
+rand = "0.8.5"
+rand_chacha = "0.3.1"

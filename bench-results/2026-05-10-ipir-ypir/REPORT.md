@@ -208,6 +208,52 @@ Artifact: `raw/ipir-32768x131072-after-affine-cache.log`
 - `online_serialize_only/5`: 1.2599 ms median
 - `online_pack_and_serialize/5`: 18.664 ms median
 
+### Nullifier PIR Full-Snapshot Query Check After YPIR-Style Kernel
+
+Command shape:
+
+```bash
+target/release/nullifier-pir serve \
+  --snapshot-path data/nullifiers.bin \
+  --backend local-ipir \
+  --host 127.0.0.1 \
+  --port 8090 \
+  --setup-seed 7
+```
+
+Client commands and exact output: `raw/nullifier-full-snapshot-ypir-kernel-query-latency.log`
+
+Notes:
+
+- Server: full `data/nullifiers.bin`, 49,925,853 nullifiers.
+- Backend: `local-ipir`, rebuilt after switching `IPIRServer::new` to the default `simplepir-kernel::ChunkedSplitKernel`.
+- Timing source: the client prints local query generation, HTTP POST round trip, client decode, and total query time; server time is read from the `/query` response header `x-nullifier-pir-server-time-us`.
+- The absent-nullifier process wall time includes the CLI's local full-snapshot scan to confirm absence before sending the PIR query.
+
+Fixture query results:
+
+- Existing nullifier `b3cdb97715d5e3dd624fc87906b9d13b4e4ec6a63989d989936f2504f0a1f706`: found at global index 0, row 0, offset 0, verified through PIR.
+  - Full query: 601.768 ms
+  - Client query generation: 46.086 ms
+  - HTTP POST round trip: 524.163 ms
+  - Server: 517.883 ms
+  - Client decode: 31.324 ms
+  - Process wall: 0.65 s
+- Existing nullifier `4b4f13ad02a04d16e6efa83730751f53eead7dbf019e1632d937b8c8631d393e`: found at global index 1,638,400, row 14,628, offset 64, verified through PIR.
+  - Full query: 595.809 ms
+  - Client query generation: 45.864 ms
+  - HTTP POST round trip: 523.787 ms
+  - Server: 515.472 ms
+  - Client decode: 26.062 ms
+  - Process wall: 0.67 s
+- Absent nullifier `0000000000000000000000000000000000000000000000000000000000000000`: confirmed absent locally and not present in decoded probe row 0.
+  - Full query: 599.461 ms
+  - Client query generation: 45.875 ms
+  - HTTP POST round trip: 527.433 ms
+  - Server: 523.124 ms
+  - Client decode: 26.046 ms
+  - Process wall: 1.17 s
+
 ## Normalized Interpretation
 
 - YPIR+SP headline full-system timing is 294 ms average online server time, including 199 ms ring packing.

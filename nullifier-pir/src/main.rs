@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ipir_sp::client::IPIRClient;
 use nullifier_pir::backend::{Backend, BackendKind, PirBackend};
 use nullifier_pir::encoding::{decode_item_coefficients, extract_nullifier, nullifier_offset};
+use nullifier_pir::http::SERVER_TIME_HEADER;
 use nullifier_pir::snapshot::{
     download_snapshot, sha256_file, write_metadata, NullifierSnapshot, SnapshotMetadata,
     DEFAULT_SNAPSHOT_URL,
@@ -223,23 +225,36 @@ fn query_row(
     }
 
     let pir_client = IPIRClient::from_db_sz(pir_item_count, ITEM_SIZE_BITS);
+    let query_started = Instant::now();
+    let query_gen_started = Instant::now();
     let query_setup = pir_client.generate_query_setup_simplepir_from_seed(
         nullifier_pir::backend::seed_from_u64(setup_seed),
     );
     let (query, client_seed) =
         pir_client.generate_query_simplepir_from_query_setup(&query_setup, row);
+    let query_gen_time = query_gen_started.elapsed();
     let query_url = format!("{}{}", server_url.trim_end_matches('/'), QUERY_ENDPOINT);
+    let post_started = Instant::now();
     let response = client
         .post(&query_url)
         .body(query.to_bytes())
         .send()
         .with_context(|| format!("POST {query_url}"))?
-        .error_for_status()?
+        .error_for_status()?;
+    let post_round_trip = post_started.elapsed();
+    let server_time_us = response
+        .headers()
+        .get(SERVER_TIME_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u128>().ok());
+    let response = response
         .bytes()
         .with_context(|| format!("read {query_url} response"))?;
 
+    let decode_started = Instant::now();
     let decoded_coeffs = pir_client.decode_response_simplepir_raw(client_seed, &response);
     let row_bytes = decode_item_coefficients(&decoded_coeffs);
+    let decode_time = decode_started.elapsed();
     if let Some(offset) = expected_offset {
         let returned = extract_nullifier(&row_bytes, offset)
             .context("decoded row did not contain expected nullifier offset")?;
@@ -253,6 +268,16 @@ fn query_row(
         row,
         record_count,
         row_bytes.len()
+    );
+    println!(
+        "timing_us total_query={} client_query_gen={} http_post_round_trip={} server={} client_decode={}",
+        query_started.elapsed().as_micros(),
+        query_gen_time.as_micros(),
+        post_round_trip.as_micros(),
+        server_time_us
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "missing".to_string()),
+        decode_time.as_micros()
     );
     Ok(row_bytes)
 }

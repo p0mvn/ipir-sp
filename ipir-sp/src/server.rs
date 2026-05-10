@@ -10,6 +10,8 @@ use inspiring::{
     pack, InspiringError, LweBatch, LweCiphertext, PackPreprocessed, RlweCiphertext, RlweParams,
 };
 use rayon::prelude::*;
+pub use simplepir_kernel::ToU64;
+use simplepir_kernel::{ChunkedSplitKernel, FirstDimKernel};
 use spiral_rs::poly::{
     add_into, from_ntt_alloc, multiply, to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw,
 };
@@ -18,52 +20,22 @@ use crate::modulus_switch::serialize_rlwe_response;
 use crate::params::YpirSchemeParams;
 use crate::serialize::deserialize_u64s_le;
 
-/// Scalar types accepted by the SimplePIR database.
-pub trait ToU64 {
-    /// Convert a plaintext database element to a `u64`.
-    fn to_u64(self) -> u64;
-}
-
-impl ToU64 for u8 {
-    fn to_u64(self) -> u64 {
-        self as u64
-    }
-}
-
-impl ToU64 for u16 {
-    fn to_u64(self) -> u64 {
-        self as u64
-    }
-}
-
-impl ToU64 for u32 {
-    fn to_u64(self) -> u64 {
-        self as u64
-    }
-}
-
-impl ToU64 for u64 {
-    fn to_u64(self) -> u64 {
-        self
-    }
-}
-
 /// A YPIR-formatted server database.
 ///
 /// Internally the DB is stored column-major (`col * padded_rows + row`), which
 /// matches the layout YPIR's fast dot-product kernels consume. The arithmetic
-/// here is intentionally scalar and portable; optimized kernels can be added
-/// later without changing the surrounding InspiRING boundary.
-#[derive(Debug, Clone)]
+/// here is routed through a swappable kernel so optimized CPU and GPU backends
+/// can be added without changing the surrounding InspiRING boundary.
 pub struct YServer<T> {
     params: YpirSchemeParams,
     db: Vec<T>,
     pad_rows: bool,
+    kernel: Box<dyn FirstDimKernel<T>>,
 }
 
 impl<T> YServer<T>
 where
-    T: Copy + Default + ToU64,
+    T: Copy + Default + ToU64 + 'static,
 {
     /// Build a server from a database iterator.
     ///
@@ -72,9 +44,40 @@ where
     /// both cases the internal storage is column-major.
     pub fn new<I>(
         params: YpirSchemeParams,
+        db: I,
+        input_is_transposed: bool,
+        pad_rows: bool,
+    ) -> Self
+    where
+        I: Iterator<Item = T>,
+    {
+        Self::with_kernel(
+            params,
+            db,
+            input_is_transposed,
+            pad_rows,
+            Box::new(ChunkedSplitKernel::default()),
+        )
+    }
+
+    /// Build a server with an explicit first-dimension query kernel.
+    ///
+    /// This is the extension point for swapping the online DB/query multiply
+    /// without changing the rest of the IPIR-SP server pipeline. The input
+    /// database is materialized into the same internal column-major layout as
+    /// [`YServer::new`], then [`FirstDimKernel::prepare`] is called once with the
+    /// stored database and shape. CPU kernels normally ignore `prepare`; an
+    /// accelerator backend can use it to upload or pre-index the DB.
+    ///
+    /// `input_is_transposed` has the same meaning as in [`YServer::new`]:
+    /// `false` means the iterator is logical row-major `(row, col)`, and `true`
+    /// means it is already in column-major server order.
+    pub fn with_kernel<I>(
+        params: YpirSchemeParams,
         mut db: I,
         input_is_transposed: bool,
         pad_rows: bool,
+        mut kernel: Box<dyn FirstDimKernel<T>>,
     ) -> Self
     where
         I: Iterator<Item = T>,
@@ -102,10 +105,13 @@ where
             }
         }
 
+        kernel.prepare(&stored, padded_rows, cols);
+
         Self {
             params,
             db: stored,
             pad_rows,
+            kernel,
         }
     }
 
@@ -161,9 +167,8 @@ where
 
     /// Multiply one packed first-dimension query by the stored database.
     ///
-    /// This is the scalar equivalent of YPIR's `fast_batched_dot_product::<1,
-    /// T>` call in `perform_online_computation_simplepir`, with reduction into
-    /// InspiRING's single CRT modulus.
+    /// The default backend is the portable YPIR-style chunked split kernel,
+    /// with reduction into InspiRING's single CRT modulus.
     #[must_use]
     pub fn multiply_query(&self, rlwe: &RlweParams, query: &[u64]) -> Vec<u64> {
         let rows = self.db_rows_padded();
@@ -171,15 +176,8 @@ where
         assert_eq!(query.len(), rows, "query length must match padded rows");
 
         let mut out = vec![0u64; cols];
-        for col in 0..cols {
-            let mut acc = 0u128;
-            for (row, query_val) in query.iter().enumerate() {
-                let db_val = self.db[col * rows + row].to_u64();
-                acc += (*query_val as u128) * (db_val as u128);
-                acc %= rlwe.q as u128;
-            }
-            out[col] = acc as u64;
-        }
+        self.kernel
+            .multiply_query(rlwe, &self.db, rows, cols, query, &mut out);
         out
     }
 
@@ -598,6 +596,7 @@ impl YpirSchemeParams {
 mod tests {
     use inspiring::key_switching::KeySwitchingMatrix;
     use inspiring::{GadgetParams, RlweParams};
+    use simplepir_kernel::ScalarKernel;
     use spiral_rs::poly::{from_ntt_alloc, PolyMatrix, PolyMatrixNTT};
 
     use crate::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
@@ -698,6 +697,21 @@ mod tests {
                 2 + 3 * 4 + 5 * 7 + 7 * 10,
                 2 * 2 + 3 * 5 + 5 * 8 + 7 * 11
             ]
+        );
+    }
+
+    #[test]
+    fn default_kernel_matches_scalar_kernel() {
+        let rlwe = tiny_rlwe();
+        let ypir = tiny_ypir(16, 5);
+        let default_server = YServer::new(ypir.clone(), 0u16..80, false, true);
+        let scalar_server =
+            YServer::with_kernel(ypir, 0u16..80, false, true, Box::new(ScalarKernel));
+        let query = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
+
+        assert_eq!(
+            default_server.multiply_query(&rlwe, &query),
+            scalar_server.multiply_query(&rlwe, &query)
         );
     }
 

@@ -1,0 +1,26 @@
+{
+  "offline": {
+    "uploadBytes": 0,
+    "downloadBytes": 0,
+    "serverTimeMs": 7636,
+    "clientTimeMs": 0,
+    "simplepirPrepTimeMs": 2861,
+    "simplepirHintBytes": 0
+  },
+  "online": {
+    "uploadBytes": 587776,
+    "downloadBytes": 61440,
+    "simplepirQueryBytes": 0,
+    "simplepirRespBytes": 0,
+    "serverTimeMs": 288,
+    "clientQueryGenTimeMs": 71,
+    "clientDecodeTimeMs": 5,
+    "firstPassTimeMs": 47,
+    "ringPackingTimeMs": 278,
+    "allServerTimesMs": [
+      328,
+      247
+    ],
+    "stdDevServerTimeMs": 40.5
+  }
+}

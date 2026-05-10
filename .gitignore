@@ -32,7 +32,8 @@ target/
 # anyway for reproducible benches and noise tests. Do NOT add Cargo.lock here.
 
 # ---- Editor / IDE ----
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo

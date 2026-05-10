@@ -6,6 +6,15 @@
 //! and §9 for the structural comparison with CDKS.
 //!
 //! Phase 8 status: online entry point is implemented.
+//!
+//! Known gap: SPEC.md §8 describes a stronger offline/online split than this
+//! module currently implements. `PackPreprocessed` caches `â_agg` and the
+//! automorphic key-switching images, but not the collapse `a`-trace or the
+//! gadget-decomposed digits from that trace. As a result, each online `pack`
+//! still calls `collapse`, whose `ks_switch` path repeats the `c1` inverse NTT,
+//! gadget inversion, digit NTT, and top-row multiplication for the deterministic
+//! `a` side. That work depends only on preprocessing material and is the next
+//! optimization target.
 
 use spiral_rs::poly::{PolyMatrix, PolyMatrixNTT, PolyMatrixRaw};
 
@@ -51,6 +60,8 @@ pub fn pack<'a>(
         b_tilde.get_poly_mut(0, 0)[idx] = ct.b % pre.params.q;
     }
 
+    // TODO(online-cache): consume a precomputed collapse a-trace and digit
+    // cache so online packing only updates the b side of the cascade.
     Ok(collapse(
         pre.params,
         IRCtx {

@@ -7,13 +7,12 @@
 //!
 //! Phase 8 status: offline cache construction is implemented.
 
-use spiral_rs::poly::{from_ntt_alloc, PolyMatrix, PolyMatrixNTT};
+use rayon::prelude::*;
+use spiral_rs::poly::{from_ntt_alloc, to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw};
 
 use crate::automorph::{h, tau_g_pow};
 use crate::error::InspiringError;
-use crate::intermediate::{aggregate, transform};
 use crate::key_switching::{automorphic_image, KeySwitchingMatrix};
-use crate::lwe::LweCiphertext;
 use crate::params::RlweParams;
 
 /// All preprocessable data for a single CRS `A` and a single pair of
@@ -26,13 +25,6 @@ use crate::params::RlweParams;
 pub struct PackPreprocessed<'a> {
     /// Underlying parameter set.
     pub params: &'a RlweParams,
-
-    /// Per-LWE-slot Stage-1 result: `a_hat[k][j]` is the `j`-th
-    /// component of `IRCtx`'s `â` for input slot `k`. `a_hat.len() == d`,
-    /// `a_hat[k].len() == d`. SPEC.md §4.
-    ///
-    /// All NTT-form. CRS-side, fully preprocessable.
-    pub a_hat: Vec<Vec<PolyMatrixNTT<'a>>>,
 
     /// Stage-2 aggregated `â_agg = Σ_k a_hat[k] · X^k`. SPEC.md §5.
     pub a_agg: Vec<PolyMatrixNTT<'a>>,
@@ -88,14 +80,10 @@ impl<'a> PackPreprocessed<'a> {
         }
 
         let crs_raw = from_ntt_alloc(crs);
-        let irctxs: Vec<_> = (0..params.d)
-            .map(|k| {
-                let a = crs_raw.get_poly(k, 0).to_vec();
-                transform(params, &LweCiphertext { a, b: 0 })
-            })
+        let a_tildes: Vec<_> = (0..params.d)
+            .map(|row| a_tilde_coeffs(params, crs_raw.get_poly(row, 0)))
             .collect();
-        let agg = aggregate(params, &irctxs);
-        let a_hat = irctxs.into_iter().map(|ictx| ictx.a_hat).collect();
+        let a_agg = build_a_agg(params, &a_tildes);
 
         let two_d = 2 * params.d as u64;
         let h_d = h(params.d);
@@ -108,13 +96,90 @@ impl<'a> PackPreprocessed<'a> {
 
         Ok(Self {
             params,
-            a_hat,
-            a_agg: agg.a_hat,
+            a_agg,
             kg,
             kh,
             kg_images_left,
             kg_images_right,
         })
+    }
+}
+
+fn build_a_agg<'a>(params: &'a RlweParams, a_tildes: &[Vec<u64>]) -> Vec<PolyMatrixNTT<'a>> {
+    (0..params.d)
+        .into_par_iter()
+        .map(|slot| aggregate_slot(params, a_tildes, slot))
+        .collect()
+}
+
+fn aggregate_slot<'a>(
+    params: &'a RlweParams,
+    a_tildes: &[Vec<u64>],
+    slot: usize,
+) -> PolyMatrixNTT<'a> {
+    let mut out = vec![0_u64; params.d];
+    let exponent = if slot < params.d / 2 {
+        tau_g_pow(slot, params.d)
+    } else {
+        let two_d = 2 * params.d as u64;
+        (tau_g_pow(slot - params.d / 2, params.d) * h(params.d)) % two_d
+    };
+
+    for (shift, a_tilde) in a_tildes.iter().enumerate() {
+        add_shifted_tau(&mut out, a_tilde, exponent, shift, params.q);
+    }
+
+    for coeff in &mut out {
+        *coeff = (u128::from(*coeff) * u128::from(params.d_inv) % u128::from(params.q)) as u64;
+    }
+
+    let mut raw = PolyMatrixRaw::zero(&params.spiral, 1, 1);
+    raw.get_poly_mut(0, 0).copy_from_slice(&out);
+    to_ntt_alloc(&raw)
+}
+
+fn a_tilde_coeffs(params: &RlweParams, a: &[u64]) -> Vec<u64> {
+    assert_eq!(
+        a.len(),
+        params.d,
+        "preprocess::a_tilde_coeffs expects an LWE vector of length d"
+    );
+
+    let mut out = vec![0_u64; params.d];
+    out[0] = a[0] % params.q;
+    for (i, coeff) in a.iter().enumerate().skip(1) {
+        let reduced = coeff % params.q;
+        out[params.d - i] = if reduced == 0 { 0 } else { params.q - reduced };
+    }
+    out
+}
+
+fn add_shifted_tau(out: &mut [u64], poly: &[u64], exponent: u64, shift: usize, q: u64) {
+    let d = out.len();
+    let two_d = 2 * d as u64;
+
+    for (source_idx, coeff) in poly.iter().enumerate() {
+        let reduced = *coeff % q;
+        if reduced == 0 {
+            continue;
+        }
+
+        let exp = (source_idx as u64 * exponent) % two_d;
+        let mut idx = if exp < d as u64 {
+            exp as usize
+        } else {
+            (exp - d as u64) as usize
+        };
+        let mut negate = exp >= d as u64;
+
+        idx += shift;
+        if idx >= d {
+            idx -= d;
+            negate = !negate;
+        }
+
+        let term = if negate { q - reduced } else { reduced };
+        out[idx] = ((u128::from(out[idx]) + u128::from(term)) % u128::from(q)) as u64;
     }
 }
 
@@ -163,7 +228,6 @@ mod tests {
         let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
             .expect("valid preprocessing");
 
-        assert_eq!(pre.a_hat.len(), params.d);
         assert_eq!(pre.a_agg.len(), params.d);
         assert_eq!(pre.kg_images_left.len(), params.d / 2 - 1);
         assert_eq!(pre.kg_images_right.len(), params.d / 2 - 1);

@@ -7,8 +7,9 @@
 //! ```
 //!
 //! By default the fixture uses a smaller `d = 64` shape that runs on ordinary
-//! development machines. Set `IPIR_SP_BENCH_FULL=1` to attempt the headline
-//! YPIR command shape: `cargo run --release -- 32768 131072`.
+//! development machines. Set `IPIR_SP_BENCH_MID=1` for a `d = 1024` profile,
+//! or `IPIR_SP_BENCH_FULL=1` to attempt the headline YPIR command shape:
+//! `cargo run --release -- 32768 131072`.
 //!
 //! The current `ipir-sp` crate intentionally keeps the SimplePIR matrix kernels
 //! scalar and portable. These benches therefore isolate the InspiRING packing
@@ -82,6 +83,22 @@ const SMALL_SPEC: BenchSpec = BenchSpec {
     q_prime_2: 257,
 };
 
+const MID_SPEC: BenchSpec = BenchSpec {
+    name: "ipir_sp_mid_d1024_1024_128",
+    rows: 1024,
+    item_size_bits: 128,
+    degree: 1024,
+    q: 268_369_921,
+    p: 64,
+    sigma: 3.2,
+    gadget: GadgetParams {
+        bits_per: 4,
+        ell: 8,
+    },
+    q_prime_1: 16,
+    q_prime_2: 257,
+};
+
 fn deterministic_secret(params: &RlweParams) -> ClientSecret {
     let coeffs: Vec<_> = (0..params.d)
         .map(|idx| match (idx + SEED as usize) % 3 {
@@ -118,6 +135,8 @@ fn full_spec() -> BenchSpec {
 fn selected_spec() -> BenchSpec {
     if std::env::var_os("IPIR_SP_BENCH_FULL").is_some() {
         full_spec()
+    } else if std::env::var_os("IPIR_SP_BENCH_MID").is_some() {
+        MID_SPEC
     } else {
         SMALL_SPEC
     }
@@ -188,11 +207,18 @@ fn build_preprocessed<'a>(
     secret: &ClientSecret,
     hint_0: Vec<u64>,
 ) -> Vec<PackPreprocessed<'a>> {
+    eprintln!("setup: extracting CRS blocks from hint");
     let offline = offline_precompute_from_hint(rlwe, ypir, hint_0);
+    eprintln!(
+        "setup: extracted {} CRS block(s); generating key-switch pairs",
+        offline.crs_blocks.len()
+    );
     let mut rng = ChaCha20Rng::seed_from_u64(SEED);
     let key_pairs = generate_ks_pairs(rlwe, secret, offline.crs_blocks.len(), &mut rng);
+    eprintln!("setup: building pack preprocessing cache");
     let preprocessed = build_pack_preprocessed_blocks(rlwe, &offline.crs_blocks, key_pairs)
         .expect("benchmark preprocessing builds");
+    eprintln!("setup: pack preprocessing cache built");
 
     // `crs_blocks` and `hint_0` are no longer needed after
     // `PackPreprocessed::build` has absorbed them. Drop promptly so the online
@@ -203,12 +229,25 @@ fn build_preprocessed<'a>(
 
 fn build_fixture() -> BenchFixture<'static> {
     let spec = selected_spec();
+    eprintln!(
+        "setup: selected profile={}, rows={}, item_bits={}, d={}",
+        spec.name, spec.rows, spec.item_size_bits, spec.degree
+    );
     let (rlwe, ypir) = params_for_spec(spec);
     let rlwe = Box::leak(Box::new(rlwe));
+    eprintln!(
+        "setup: params ready, outputs={}, db_cols={}",
+        ypir.db_cols / rlwe.d,
+        ypir.db_cols
+    );
     let secret = deterministic_secret(rlwe);
+    eprintln!("setup: generating deterministic fixture material");
     let (hint_0, intermediate, messages) = encrypted_fixture_material(rlwe, &ypir, &secret);
+    eprintln!("setup: deterministic fixture material ready");
     let preprocessed = build_preprocessed(rlwe, &ypir, &secret, hint_0);
+    eprintln!("setup: checking deterministic noise");
     let noise = noise_inf_norm(rlwe, &secret, &intermediate, &messages, &preprocessed);
+    eprintln!("setup: deterministic noise checked");
     drop(messages);
 
     BenchFixture {

@@ -29,7 +29,7 @@ the per-stage breakdown.
 | 5     | RLWE under `s_tilde`                 | done   |
 | 6     | Gadget decomposition                 | done   |
 | 7     | Key switching                        | done   |
-| 8     | `TRANSFORM` (LWE -> IRCtx)           | todo   |
+| 8     | `TRANSFORM` (LWE -> IRCtx)           | done   |
 | 9     | `aggregate`                          | todo   |
 | 10    | `collapse_one`                       | todo   |
 | 11    | `collapse_half`                      | todo   |

@@ -154,3 +154,4 @@ InsPIRing: pick largest `γ` such that `γ < g`. Then, **only two** coefficients
 ## Implications
 
 - InsPIRing is strictly worse than CDKS in-terms of pre-processing. The main idea of InsPIRing is to offload more online computation to offline. That may be constraining for databases needing a fast rebuild.
+   * InsPIRing packing has not only key switching but also intermediary ciphertexts, whose CRS public randomness can be pre-computed. While YPIR has more key switching matrices, the cost of the intermediary ciphertext pre-computation is much higher, resulting in roughly 3x overhead compared to YPIR at similar parameters (see InsPIRe paper benchmarks).

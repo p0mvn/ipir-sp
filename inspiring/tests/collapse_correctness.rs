@@ -49,6 +49,7 @@ fn noiseless_ks<'a>(
 
     KeySwitchingMatrix {
         mat: spiral_rs::poly::stack_ntt(&(-&a).ntt(), &y),
+        params,
     }
 }
 
@@ -174,7 +175,7 @@ fn collapse_one_with_real_key_switching_preserves_plaintext() {
         b: ntt_from_coeffs(&params, &b),
     };
 
-    collapse_one(&params, &mut state, &k);
+    collapse_one(&mut state, &k);
 
     assert_eq!(
         decrypt_single_state(&params, &state.a[0], &state.b, &s0),
@@ -206,7 +207,7 @@ fn collapse_one_with_noiseless_key_switching_preserves_plaintext() {
         b: ntt_from_coeffs(&params, &b),
     };
 
-    collapse_one(&params, &mut state, &k);
+    collapse_one(&mut state, &k);
 
     assert_eq!(
         decrypt_single_state(&params, &state.a[0], &state.b, &s0),
@@ -252,7 +253,7 @@ fn automorphic_key_image_switches_matching_tau_g_secret_pair() {
         b: ntt_from_coeffs(&params, &b),
     };
 
-    collapse_one(&params, &mut state, &k_image);
+    collapse_one(&mut state, &k_image);
 
     assert_eq!(
         decrypt_single_state(&params, &state.a[0], &state.b, &s0),
@@ -298,7 +299,7 @@ fn tau_h_automorphic_key_image_switches_matching_right_half_secret_pair() {
         b: ntt_from_coeffs(&params, &b),
     };
 
-    collapse_one(&params, &mut state, &k_image);
+    collapse_one(&mut state, &k_image);
 
     assert_eq!(
         decrypt_single_state(&params, &state.a[0], &state.b, &s0),

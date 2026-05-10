@@ -27,11 +27,24 @@ use crate::params::RlweParams;
 /// `K = KS.Setup(s', s)` lets one transform a ciphertext under `s'`
 /// (one of `τ_g(s̃)`, `τ_h(s̃)`, …) into one under `s = s̃`. SPEC.md §6.
 ///
+/// `params` is bundled directly so [`ks_switch`] (and the cascade in
+/// [`crate::collapse`]) does not need to be threaded a second `&RlweParams`
+/// reference at every call site, *and* so a key matrix can never be paired
+/// with mismatched gadget settings: callers literally cannot construct a
+/// well-typed `(K, params)` pair where `K` was built under a different
+/// gadget. Both `params.spiral` (the inner allocator the matrix borrows
+/// from) and `params.gadget.ell` (the gadget width the matrix was built
+/// for) come from the same `params` reference here, by construction.
+///
 /// Note: `Debug` / `Clone` are not derived because [`PolyMatrixNTT`] does
 /// not implement them upstream; Phase 7 adds hand-written impls if needed.
 pub struct KeySwitchingMatrix<'a> {
     /// The encrypted gadget-scaled secret. Shape `[2, ℓ]`.
     pub mat: PolyMatrixNTT<'a>,
+    /// The RLWE parameter set this matrix was built against. Tied to the
+    /// same `'a` lifetime as the inner spiral-rs allocator referenced by
+    /// `mat`, so the borrow checker enforces consistency for free.
+    pub params: &'a RlweParams,
 }
 
 /// `KS.Setup(s_from → s_to)` — encrypt the gadget-scaled `s_from` under
@@ -85,22 +98,26 @@ pub fn ks_setup<'a>(
 
     KeySwitchingMatrix {
         mat: stack_ntt(&w, &y),
+        params,
     }
 }
 
 /// `KS.Switch(K, (c1, c2)) → (c1', c2')` — apply a key-switching matrix
 /// to an RLWE pair, returning a new pair under `s_to`. SPEC.md §6.
 ///
-/// `params` carries the gadget shape; the function asserts `K.mat` has the
-/// matching `[2 × ℓ]` layout. The body mirrors the inline KS sequence in
-/// `spiral-rs/src/server.rs` lines 80–103 (which is fused into Spiral-PIR's
-/// coefficient-expansion loop and therefore not reusable directly):
+/// The gadget shape comes from `k.params` (the `RlweParams` that `K` was
+/// built against — see [`KeySwitchingMatrix`] — which makes it impossible
+/// to call this with a `K` and an unrelated `params`). The function asserts
+/// `K.mat` has the matching `[2 × ℓ]` layout. The body mirrors the inline
+/// KS sequence in `spiral-rs/src/server.rs` lines 80–103 (which is fused
+/// into Spiral-PIR's coefficient-expansion loop and therefore not reusable
+/// directly):
 ///
 /// 1. Round-trip `c1` to coefficient form and gadget-decompose it into `ℓ`
 ///    base-`z` digit polynomials. The choice of width here MUST match
 ///    `RlweParams::gadget.ell` so the digit decomposition is the inverse of
 ///    the `g_z` factor encoded into `K.mat` by [`ks_setup`]. We pass `ℓ`
-///    explicitly via `params.gadget.ell` instead of reading
+///    explicitly via `k.params.gadget.ell` instead of reading
 ///    `K.mat.cols` so a malformed key matrix is caught by the assertion
 ///    below rather than silently miscomputing.
 /// 2. NTT-forward the digits and multiply by `K.mat`. The result is a
@@ -117,13 +134,13 @@ pub fn ks_setup<'a>(
 /// [`crate::pack::pack`]. Tampering with this is a production-blocker.
 ///
 pub fn ks_switch<'a>(
-    params: &'a RlweParams,
-    k: &KeySwitchingMatrix<'_>,
+    k: &KeySwitchingMatrix<'a>,
     c1: &PolyMatrixNTT<'a>,
     c2: &PolyMatrixNTT<'a>,
 ) -> (PolyMatrixNTT<'a>, PolyMatrixNTT<'a>) {
     ks_call_count::inc();
 
+    let params = k.params;
     assert_eq!(k.mat.rows, 2, "KS matrix must have 2 rows ([w; y])");
     assert_eq!(
         k.mat.cols, params.gadget.ell,
@@ -138,8 +155,9 @@ pub fn ks_switch<'a>(
     // call in `ks_setup`. Anything else makes the digit decomposition
     // non-inverse to the `g_z` factor encoded in `K.mat`, breaking the KS
     // identity. `params.gadget.ell` is the validated source-of-truth (see
-    // `RlweParams::new`), which is why we thread `params` through here
-    // rather than rely on `K.mat.cols`.
+    // `RlweParams::new`), which is why `KeySwitchingMatrix` carries its own
+    // `params` reference rather than letting us infer the width from
+    // `K.mat.cols`.
     let digits_raw = gadget_invert_alloc(params.gadget.ell, &from_ntt_alloc(c1));
     let digits_ntt = to_ntt_alloc(&digits_raw);
     let mut switched = PolyMatrixNTT::zero(c1.params, 2, 1);
@@ -155,10 +173,13 @@ pub fn ks_switch<'a>(
 /// The image is just `K_g` with `τ_g^{k-1}` applied component-wise to
 /// each polynomial of the matrix. SPEC.md §6 / Appendix C.
 ///
+/// The `params` reference is forwarded from the input — local images of a
+/// KS matrix share its parameter set by definition.
 #[must_use]
 pub fn automorphic_image<'a>(k: &KeySwitchingMatrix<'a>, t: u64) -> KeySwitchingMatrix<'a> {
     KeySwitchingMatrix {
         mat: tau_ntt(&k.mat, t),
+        params: k.params,
     }
 }
 
@@ -398,7 +419,6 @@ mod tests {
         );
 
         let (c1_new, c2_new) = ks_switch(
-            &params,
             &k,
             &ntt_from_coeffs(&params, &c1),
             &ntt_from_coeffs(&params, &c2),
@@ -447,7 +467,6 @@ mod tests {
         let c2 = sub_poly(&encoded, &negacyclic_mul(&c1, &s_from_rot, params.q), params.q);
 
         let (c1_new, c2_new) = ks_switch(
-            &params,
             &k_image,
             &ntt_from_coeffs(&params, &c1),
             &ntt_from_coeffs(&params, &c2),
@@ -481,9 +500,9 @@ mod tests {
         let c2 = PolyMatrixNTT::zero(&params.spiral, 1, 1);
 
         ks_call_count::reset();
-        let _ = ks_switch(&params, &k, &c1, &c2);
-        let _ = ks_switch(&params, &k, &c1, &c2);
-        let _ = ks_switch(&params, &k, &c1, &c2);
+        let _ = ks_switch(&k, &c1, &c2);
+        let _ = ks_switch(&k, &c1, &c2);
+        let _ = ks_switch(&k, &c1, &c2);
         assert_eq!(ks_call_count::get(), 3);
     }
 }

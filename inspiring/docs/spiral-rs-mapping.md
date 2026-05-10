@@ -62,7 +62,7 @@ For each paper / SPEC.md symbol, we record:
 | `τ_g^j(p)` | iterated automorphism | none | **wrapper required**: `automorph::tau_g_pow(j, &p)`. Internally compose `τ_g` `j` times — at small `d` the cost is negligible; at `d = 2048` we cache the `j ↦ pow_mod(5, j, 2d)` exponent table and call `automorph_alloc(a, exponent)` once. |
 | `g_z`, `g_z^{-1}` (gadget vector / decomposition) | base-`z` digit decomposition | `gadget::build_gadget(params, rows, cols)` and `gadget::gadget_invert(out, inp)` / `gadget::gadget_invert_alloc(mx, &inp)` | **constraint to document**: spiral-rs derives `bits_per ≈ ⌊log₂(q) / ℓ⌋ + 1` from the `(rows, cols)` shape via `gadget::get_bits_per`, *not* from a user-supplied `z`. We must ensure `z = 2^bits_per` matches the InspiRING `(z, ℓ)` choice. Verified against paper Table 5: param set 1 `(log q = 28, ℓ = 8) ⇒ bits_per = ⌊28/8⌋ + 1 = 4 ✓`; param set 2 `(log q = 56, ℓ = 3) ⇒ bits_per = ⌊56/3⌋ + 1 = 19 ✓`. Codified as an `assert!` in `RlweParams::new`. |
 | `KS.Setup(s' → s)` | RLWE-to-RLWE key-switch matrix | *not directly exposed* — components are: `client::Client::encrypt_matrix_reg`, `gadget::build_gadget`, `poly::scalar_multiply` | **wrapper required**: `key_switching::ks_setup(s_from: &PolyMatrixNTT, s_to: &PolyMatrixNTT, params, dg, rng) -> KeySwitchingMatrix`. Implementation: build `g = build_gadget(params, 1, ℓ)`, scale `s_from * g` (NTT-form scalar multiply), encrypt under `s_to` using a hand-rolled regev encryption (we cannot reuse `Client::encrypt_matrix_reg` because it owns the secret key as `Client` state; we replicate its `get_regev_sample` body inside our wrapper, taking the secret as a `PolyMatrixNTT` parameter). |
-| `KS.Switch(K, c)` | apply a KS matrix to a ciphertext | not exposed; the equivalent is hidden inside `server::coefficient_expansion` | **wrapper required**: `key_switching::ks_switch(k: &KeySwitchingMatrix, ct: &RlweCiphertext) -> RlweCiphertext`. Implementation pattern follows `server.rs:80-103`: gadget-invert `ct.c1` (raw), NTT-forward, multiply by the KS matrix, add `(0, ct.c2)`. |
+| `KS.Switch(K, c)` | apply a KS matrix to a ciphertext | not exposed; the equivalent is hidden inside `server::coefficient_expansion` | **wrapper required**: `key_switching::ks_switch(k: &KeySwitchingMatrix, c1, c2) -> (c1', c2')`. Reads gadget width from `k.params.gadget.ell` (parameters are bundled onto the matrix — see §3). Implementation pattern follows `server.rs:80-103`: gadget-invert `ct.c1` (raw), NTT-forward, multiply by the KS matrix, add `(0, ct.c2)`. |
 | `IRCtx` (the `(â, b̃)` intermediate) | Stage 1 / Stage 2 | not in spiral-rs | **type defined here**: `intermediate::IRCtx { a_hat: Vec<PolyMatrixNTT>, b_tilde: PolyMatrixRaw }`. |
 | `RlweCiphertext` (final pack output) | | spiral-rs uses bare `PolyMatrixNTT` of shape `(2, 1)` to mean an RLWE pair `(c1, c2)` | **type alias defined here**: `pack::RlweCiphertext = PolyMatrixNTT<'a>` with rows = 2, cols = 1, plus a thin newtype for type-safety. |
 | `PackPreprocessed` (CRS-side cache) | offline state | not in spiral-rs | **type defined here**: `preprocess::PackPreprocessed`. |
@@ -92,25 +92,40 @@ src/automorph.rs
         // Phase 11 hardening will replace this with an NTT-slot permutation.
 
 src/key_switching.rs
-    pub struct KeySwitchingMatrix<'a> { /* PolyMatrixNTT inner */ }
+    pub struct KeySwitchingMatrix<'a> {
+        pub mat:    PolyMatrixNTT<'a>,   // shape [2 × ℓ]
+        pub params: &'a RlweParams,      // params the matrix was built under
+    }
+        // The `params` field is bundled directly so `ks_switch`, `collapse_one`
+        // and `collapse_half` do not need a parallel `&RlweParams` argument
+        // *and* so a key matrix can never be paired with mismatched gadget
+        // settings — both `params.spiral` (the inner allocator `mat` borrows
+        // from) and `params.gadget.ell` (the gadget width `mat` was built
+        // for) come from the same `&RlweParams` reference, by construction.
 
-    pub fn ks_setup(params: &RlweParams,
+    pub fn ks_setup(params: &'a RlweParams,
                     s_from: &PolyMatrixNTT, s_to: &PolyMatrixNTT,
-                    rng: &mut ChaCha20Rng) -> KeySwitchingMatrix
+                    rng: &mut ChaCha20Rng) -> KeySwitchingMatrix<'a>
         // Builds an ℓ-column RLWE encryption of s_from · g_z under s_to.
         // Replicates the body of spiral-rs Client::get_regev_sample so we can
         // pass the secret as a parameter rather than holding it in Client.
-        // Pulls σ_χ, ℓ, and the spiral-rs allocator from `params` (so callers
-        // can never pass mismatched (RlweParams, SpiralParams) pairs).
+        // Pulls σ_χ, ℓ, and the spiral-rs allocator from `params`, then stores
+        // the same `&'a RlweParams` reference on the returned matrix.
 
-    pub fn ks_switch(params: &RlweParams, k: &KeySwitchingMatrix,
-                     c1: &PolyMatrixNTT, c2: &PolyMatrixNTT)
-                     -> (PolyMatrixNTT, PolyMatrixNTT)
+    pub fn automorphic_image(k: &KeySwitchingMatrix<'a>, t: u64)
+                             -> KeySwitchingMatrix<'a>
+        // Forwards `k.params` to the image — local images of a KS matrix
+        // share its parameter set by definition.
+
+    pub fn ks_switch(k: &KeySwitchingMatrix<'a>,
+                     c1: &PolyMatrixNTT<'a>, c2: &PolyMatrixNTT<'a>)
+                     -> (PolyMatrixNTT<'a>, PolyMatrixNTT<'a>)
         // Implements the KS body of server::coefficient_expansion (lines
         // 80-103) abstracted out of the coefficient-expansion loop.
-        // `params.gadget.ell` is the canonical gadget width; the function
-        // asserts `k.mat.cols == params.gadget.ell` so a malformed key matrix
-        // cannot silently miscompute.
+        // Reads gadget shape from `k.params.gadget.ell`; asserts
+        // `k.mat.cols == k.params.gadget.ell` so a malformed key matrix
+        // cannot silently miscompute. No separate `params` argument — the
+        // matrix carries it.
 
     pub(crate) fn ks_call_count_inc()
         // #[cfg(test)] only. Increments a thread-local counter so

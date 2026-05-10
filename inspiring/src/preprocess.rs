@@ -141,6 +141,7 @@ mod tests {
     fn zero_ks<'a>(params: &'a RlweParams) -> KeySwitchingMatrix<'a> {
         KeySwitchingMatrix {
             mat: PolyMatrixNTT::zero(&params.spiral, 2, params.gadget.ell),
+            params,
         }
     }
 

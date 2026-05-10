@@ -8,8 +8,10 @@
 #![forbid(unsafe_code)]
 
 pub mod bits;
+pub mod client;
 pub mod modulus_switch;
 pub mod params;
+pub mod serialize;
 pub mod server;
 
 pub use params::{params_for_simplepir, YpirSchemeParams};

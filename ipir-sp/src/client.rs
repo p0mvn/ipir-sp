@@ -1,7 +1,7 @@
 //! Client-side key material for the IPIR-SP packing layer.
 //!
 //! YPIR's CDKS path uploads `log d` expansion matrices. The InspiRING path
-//! instead uploads two key-switching matrices per preprocessing block:
+//! instead uploads two key-switching matrices total:
 //! `K_g = KS.Setup(τ_g(s) -> s)` and `K_h = KS.Setup(τ_h(s) -> s)`.
 
 use inspiring::automorph::{h, tau_g_pow, tau_ntt};
@@ -13,7 +13,8 @@ use spiral_rs::poly::{
     from_ntt_alloc, multiply, to_ntt_alloc, PolyMatrix, PolyMatrixNTT, PolyMatrixRaw,
 };
 
-use crate::bits::u64s_to_contiguous_bytes;
+use crate::bits::{contiguous_bytes_to_u64s, u64s_to_contiguous_bytes};
+use crate::modulus_switch::modulus_bits;
 use crate::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
 use crate::params::{params_for_simplepir, YpirSchemeParams};
 use crate::serialize::{deserialize_u64s_le, serialize_u64s_le};
@@ -88,22 +89,6 @@ pub fn generate_ks_pair<'a>(
     (kg, kh)
 }
 
-/// Generate `count` owned `(K_g, K_h)` pairs for preprocessing blocks.
-///
-/// `PackPreprocessed` owns its keys, so callers that build many blocks need
-/// many owned pairs. They all encode the same automorphic source/target secret
-/// relation, but use fresh setup randomness from `rng`.
-pub fn generate_ks_pairs<'a>(
-    params: &'a RlweParams,
-    secret: &ClientSecret,
-    count: usize,
-    rng: &mut ChaCha20Rng,
-) -> Vec<(KeySwitchingMatrix<'a>, KeySwitchingMatrix<'a>)> {
-    (0..count)
-        .map(|_| generate_ks_pair(params, secret, rng))
-        .collect()
-}
-
 /// High-level IPIR client facade with a YPIR-shaped API.
 #[derive(Debug, Clone)]
 pub struct IPIRClient {
@@ -117,8 +102,12 @@ pub struct IPIRSimpleSetup<'a> {
     pub client_seed: IPIRSeed,
     /// Offline query polynomials, one per `d`-row database block.
     pub offline_query_polys: Vec<Vec<u64>>,
-    /// One `(K_g, K_h)` key-switching pair per response RLWE block.
-    pub key_pairs: Vec<(KeySwitchingMatrix<'a>, KeySwitchingMatrix<'a>)>,
+    /// The two key-switching matrices for one fresh query/setup.
+    ///
+    /// InspiRING derives the needed automorphic images of `K_g` and `K_h`
+    /// locally for each CRS block. The client uploads this pair once for that
+    /// query/setup, not once per output block.
+    pub key_pair: (KeySwitchingMatrix<'a>, KeySwitchingMatrix<'a>),
 }
 
 /// Client-only setup material needed to generate online SimplePIR queries.
@@ -149,15 +138,53 @@ impl IPIRSimpleQuery {
         &self.first_dim
     }
 
-    /// Serialize as little-endian `u64` coefficients, matching the `/query` body.
+    /// Serialize as little-endian `u64` coefficients.
+    ///
+    /// This is the original uncompressed query encoding. New callers should
+    /// prefer [`Self::to_packed_bytes`] to avoid uploading unused high bits.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         serialize_u64s_le(&self.first_dim)
     }
 
+    /// Serialize query coefficients using the exact bit width of `modulus`.
+    ///
+    /// For the production 56-bit IPIR-SP modulus this saves one byte per query
+    /// coefficient compared with [`Self::to_bytes`].
+    #[must_use]
+    pub fn to_packed_bytes(&self, modulus: u64) -> Vec<u8> {
+        u64s_to_contiguous_bytes(&self.first_dim, modulus_bits(modulus))
+    }
+
     /// Parse a query serialized by [`Self::to_bytes`].
     pub fn from_bytes(data: &[u8]) -> Result<Self, inspiring::InspiringError> {
         deserialize_u64s_le(data).map(Self::new)
+    }
+
+    /// Parse a query serialized by [`Self::to_packed_bytes`].
+    pub fn from_packed_bytes(
+        data: &[u8],
+        coeff_count: usize,
+        modulus: u64,
+    ) -> Result<Self, inspiring::InspiringError> {
+        let bits = modulus_bits(modulus);
+        let expected_len = (coeff_count * bits).div_ceil(8);
+        if data.len() != expected_len {
+            return Err(inspiring::InspiringError::PreprocessMismatch(format!(
+                "packed query must be {expected_len} bytes for {coeff_count} coefficients and {bits}-bit modulus, got {}",
+                data.len()
+            )));
+        }
+
+        let coeffs = contiguous_bytes_to_u64s(data, bits);
+        if coeffs.len() != coeff_count {
+            return Err(inspiring::InspiringError::PreprocessMismatch(format!(
+                "packed query decoded to {} coefficients, expected {coeff_count}",
+                coeffs.len()
+            )));
+        }
+
+        Ok(Self::new(coeffs))
     }
 }
 
@@ -220,17 +247,12 @@ impl IPIRClient {
                     .collect()
             })
             .collect();
-        let key_pairs = generate_ks_pairs(
-            &self.rlwe,
-            &secret,
-            self.ypir.db_cols / self.rlwe.d,
-            &mut rng,
-        );
+        let key_pair = generate_ks_pair(&self.rlwe, &secret, &mut rng);
 
         IPIRSimpleSetup {
             client_seed,
             offline_query_polys,
-            key_pairs,
+            key_pair,
         }
     }
 
@@ -609,6 +631,22 @@ mod tests {
     }
 
     #[test]
+    fn simple_query_packed_bytes_roundtrip() {
+        let params = params();
+        let query = IPIRSimpleQuery::new(vec![0, 1, 42, params.q - 1, 7, 8, 9, 10]);
+
+        let packed = query.to_packed_bytes(params.q);
+        let decoded = IPIRSimpleQuery::from_packed_bytes(&packed, query.as_slice().len(), params.q)
+            .expect("packed query decodes");
+
+        assert_eq!(
+            packed.len(),
+            (query.as_slice().len() * modulus_bits(params.q)).div_ceil(8)
+        );
+        assert_eq!(decoded, query);
+    }
+
+    #[test]
     fn sampled_ternary_secret_uses_mod_q_minus_one_for_negative_one() {
         let params = params();
         let mut rng = ChaCha20Rng::seed_from_u64(0x5350);
@@ -653,16 +691,15 @@ mod tests {
     }
 
     #[test]
-    fn generate_ks_pairs_returns_owned_pair_per_block() {
+    fn generate_ks_pair_returns_single_query_pair() {
         let params = params();
         let secret = ClientSecret::from_coeffs(&params, vec![1, 0, params.q - 1, 1, 0, 1, 0, 0]);
         let mut rng = ChaCha20Rng::seed_from_u64(0xFACE);
 
-        let pairs = generate_ks_pairs(&params, &secret, 3, &mut rng);
+        let pair = generate_ks_pair(&params, &secret, &mut rng);
 
-        assert_eq!(pairs.len(), 3);
-        assert_eq!(pairs[2].0.mat.rows, 2);
-        assert_eq!(pairs[2].1.mat.cols, params.gadget.ell);
+        assert_eq!(pair.0.mat.rows, 2);
+        assert_eq!(pair.1.mat.cols, params.gadget.ell);
     }
 
     #[test]

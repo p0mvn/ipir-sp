@@ -135,7 +135,7 @@ fn rust_stages_match_python_oracle_fixture_for_d8_seed_42() {
     let crs = crs_from_lwes(&params, &batch.inner);
     let kg = ks_from_fixture(&params, &fixture["K_g"]);
     let kh = ks_from_fixture(&params, &fixture["K_h"]);
-    let pre = PackPreprocessed::build(&params, &crs, kg, kh).expect("valid preprocessing");
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
     let packed = pack(&batch, &pre).expect("pack succeeds");
     let (actual_c1, actual_c2) = coeffs_stacked(&packed.inner);
 

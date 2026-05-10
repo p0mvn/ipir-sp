@@ -12,6 +12,10 @@ use crate::backend::PirBackend;
 use crate::snapshot::SnapshotMetadata;
 
 pub const SERVER_TIME_HEADER: &str = "x-nullifier-pir-server-time-us";
+pub const SERVER_DESERIALIZE_TIME_HEADER: &str = "x-nullifier-pir-server-deserialize-us";
+pub const SERVER_MATRIX_VECTOR_TIME_HEADER: &str = "x-nullifier-pir-server-matrix-vector-us";
+pub const SERVER_PACKING_TIME_HEADER: &str = "x-nullifier-pir-server-packing-us";
+pub const SERVER_SERIALIZATION_TIME_HEADER: &str = "x-nullifier-pir-server-serialization-us";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -46,7 +50,7 @@ async fn meta(data: web::Data<AppState>) -> impl Responder {
 #[post("/query")]
 async fn query(body: web::Bytes, data: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
     let started = Instant::now();
-    let response = data
+    let answer = data
         .backend
         .answer_query(&body)
         .map_err(actix_web::error::ErrorBadRequest)?;
@@ -54,7 +58,23 @@ async fn query(body: web::Bytes, data: web::Data<AppState>) -> actix_web::Result
     Ok(HttpResponse::Ok()
         .content_type("application/octet-stream")
         .insert_header((SERVER_TIME_HEADER, server_time_us))
-        .body(response))
+        .insert_header((
+            SERVER_DESERIALIZE_TIME_HEADER,
+            answer.breakdown.deserialize_us.to_string(),
+        ))
+        .insert_header((
+            SERVER_MATRIX_VECTOR_TIME_HEADER,
+            answer.breakdown.matrix_vector_us.to_string(),
+        ))
+        .insert_header((
+            SERVER_PACKING_TIME_HEADER,
+            answer.breakdown.packing_us.to_string(),
+        ))
+        .insert_header((
+            SERVER_SERIALIZATION_TIME_HEADER,
+            answer.breakdown.serialization_us.to_string(),
+        ))
+        .body(answer.body))
 }
 
 pub async fn serve(

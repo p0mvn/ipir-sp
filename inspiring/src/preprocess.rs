@@ -49,8 +49,8 @@ impl<'a> PackPreprocessed<'a> {
     pub fn build(
         params: &'a RlweParams,
         crs: &PolyMatrixNTT<'a>,
-        kg: KeySwitchingMatrix<'a>,
-        kh: KeySwitchingMatrix<'a>,
+        kg: &KeySwitchingMatrix<'a>,
+        kh: &KeySwitchingMatrix<'a>,
     ) -> Result<Self, InspiringError> {
         if crs.rows != params.d || crs.cols != 1 {
             return Err(InspiringError::PreprocessMismatch(format!(
@@ -86,7 +86,7 @@ impl<'a> PackPreprocessed<'a> {
             .map(|i| automorphic_image(&kg, (tau_g_pow(i, params.d) * h_d) % two_d))
             .collect();
         let collapse_affine =
-            precompute_collapse_affine(params, a_agg, &kg_images_left, &kg_images_right, &kh);
+            precompute_collapse_affine(params, a_agg, &kg_images_left, &kg_images_right, kh);
 
         Ok(Self {
             params,
@@ -216,8 +216,9 @@ mod tests {
         let params = params();
         let crs = crs(&params);
 
-        let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-            .expect("valid preprocessing");
+        let kg = zero_ks(&params);
+        let kh = zero_ks(&params);
+        let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
         assert_eq!(pre.collapse_a_final_ntt.rows, 1);
         assert_eq!(pre.collapse_a_final_ntt.cols, 1);
@@ -230,8 +231,10 @@ mod tests {
         let params = params();
         let wrong = PolyMatrixNTT::zero(&params.spiral, 1, 1);
 
+        let kg = zero_ks(&params);
+        let kh = zero_ks(&params);
         assert!(matches!(
-            PackPreprocessed::build(&params, &wrong, zero_ks(&params), zero_ks(&params)),
+            PackPreprocessed::build(&params, &wrong, &kg, &kh),
             Err(InspiringError::PreprocessMismatch(_))
         ));
     }

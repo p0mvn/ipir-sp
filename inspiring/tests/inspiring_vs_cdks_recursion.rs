@@ -48,10 +48,11 @@ fn batch(params: &RlweParams) -> LweBatch {
 fn preprocessing_evaluates_linear_cascade_not_cdks_tree_shape() {
     let params = params();
     let crs = crs(&params);
+    let kg = zero_ks(&params);
+    let kh = zero_ks(&params);
 
     ks_call_count::reset();
-    let _pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-        .expect("valid preprocessing");
+    let _pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
     assert_eq!(ks_call_count::get(), (params.d - 1) as u64);
     assert_ne!(
@@ -65,8 +66,9 @@ fn preprocessing_evaluates_linear_cascade_not_cdks_tree_shape() {
 fn pack_uses_precomputed_cascade_without_online_key_switch_products() {
     let params = params();
     let crs = crs(&params);
-    let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-        .expect("valid preprocessing");
+    let kg = zero_ks(&params);
+    let kh = zero_ks(&params);
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
     ks_call_count::reset();
     let _ = pack(&batch(&params), &pre).expect("pack succeeds");
@@ -78,8 +80,9 @@ fn pack_uses_precomputed_cascade_without_online_key_switch_products() {
 fn preprocessing_api_accepts_exactly_two_base_key_switching_matrices() {
     let params = params();
     let crs = crs(&params);
-    let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-        .expect("valid preprocessing");
+    let kg = zero_ks(&params);
+    let kh = zero_ks(&params);
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
     assert_eq!(pre.collapse_a_final_ntt.rows, 1);
     assert_eq!(pre.collapse_a_final_ntt.cols, 1);

@@ -14,15 +14,15 @@
 //! The SimplePIR first-dimension multiply is benchmarked separately from the
 //! InspiRING packing boundary so changes to the DB/query kernel are visible.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use ipir_sp::client::{generate_ks_pairs, ClientSecret};
+use ipir_sp::client::{generate_ks_pair, ClientSecret, IPIRClient, IPIRSimpleQuery};
 use ipir_sp::modulus_switch::{serialize_rlwe_response, switched_rlwe_response_len};
 use ipir_sp::params::{
     params_for_simplepir, PLAINTEXT_MODULUS, Q_PRIME_1, Q_PRIME_2, SINGLE_CRT_Q,
 };
-use ipir_sp::serialize::serialized_ks_pair_len;
+use ipir_sp::serialize::{serialize_ks_pair, serialize_u64s_le, serialized_ks_pair_len};
 use ipir_sp::server::{
     build_pack_preprocessed_blocks, offline_precompute_from_hint, pack_intermediate_blocks,
 };
@@ -65,6 +65,19 @@ struct BenchFixture<'a> {
     first_dim_query: Vec<u64>,
     preprocessed: Vec<PackPreprocessed<'a>>,
     noise_bits: u32,
+}
+
+struct UploadMeasurements {
+    key_pair_bytes: usize,
+    offline_query_polys_bytes: usize,
+    online_query_packed_bytes: usize,
+    online_query_legacy_bytes: usize,
+}
+
+impl UploadMeasurements {
+    fn fresh_query_total_bytes(&self) -> usize {
+        self.key_pair_bytes + self.offline_query_polys_bytes + self.online_query_packed_bytes
+    }
 }
 
 const SMALL_SPEC: BenchSpec = BenchSpec {
@@ -140,6 +153,12 @@ fn selected_spec() -> BenchSpec {
     } else {
         SMALL_SPEC
     }
+}
+
+fn seed_from_u64(value: u64) -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    seed[..8].copy_from_slice(&value.to_le_bytes());
+    seed
 }
 
 fn params_for_spec(spec: BenchSpec) -> (RlweParams, YpirSchemeParams) {
@@ -225,13 +244,13 @@ fn build_preprocessed<'a>(
     eprintln!("setup: extracting CRS blocks from hint");
     let offline = offline_precompute_from_hint(rlwe, ypir, hint_0);
     eprintln!(
-        "setup: extracted {} CRS block(s); generating key-switch pairs",
+        "setup: extracted {} CRS block(s); generating per-query key-switch pair",
         offline.crs_blocks.len()
     );
     let mut rng = ChaCha20Rng::seed_from_u64(SEED);
-    let key_pairs = generate_ks_pairs(rlwe, secret, offline.crs_blocks.len(), &mut rng);
+    let key_pair = generate_ks_pair(rlwe, secret, &mut rng);
     eprintln!("setup: building pack preprocessing cache");
-    let preprocessed = build_pack_preprocessed_blocks(rlwe, &offline.crs_blocks, key_pairs)
+    let preprocessed = build_pack_preprocessed_blocks(rlwe, &offline.crs_blocks, &key_pair)
         .expect("benchmark preprocessing builds");
     eprintln!("setup: pack preprocessing cache built");
 
@@ -352,9 +371,75 @@ fn log2_ceil(value: u128) -> u32 {
     }
 }
 
-fn compressed_key_upload_bytes(params: &RlweParams) -> usize {
-    let bits_per_coeff = (u64::BITS - (params.q - 1).leading_zeros()) as usize;
-    (2 * 2 * params.gadget.ell * params.d * bits_per_coeff).div_ceil(8)
+fn measure_uploads(fixture: &BenchFixture<'_>) -> UploadMeasurements {
+    let client = IPIRClient::new(fixture.rlwe, &fixture.ypir);
+    let setup = client.generate_setup_simplepir_from_seed(seed_from_u64(SEED));
+    let key_pair_bytes = serialize_ks_pair(fixture.rlwe, &setup.key_pair.0, &setup.key_pair.1)
+        .expect("setup key pair serializes")
+        .len();
+    let offline_query_polys_bytes = setup
+        .offline_query_polys
+        .iter()
+        .map(|poly| serialize_u64s_le(poly).len())
+        .sum();
+    let online_query = IPIRSimpleQuery::new(fixture.first_dim_query.clone());
+    let online_query_packed_bytes = online_query.to_packed_bytes(fixture.rlwe.q).len();
+    let online_query_legacy_bytes = online_query.to_bytes().len();
+
+    UploadMeasurements {
+        key_pair_bytes,
+        offline_query_polys_bytes,
+        online_query_packed_bytes,
+        online_query_legacy_bytes,
+    }
+}
+
+fn measure_server_breakdown_once(
+    fixture: &BenchFixture<'_>,
+    packed_query_body: &[u8],
+    packed_fixture: &[inspiring::RlweCiphertext<'_>],
+) -> (Duration, Duration, Duration, Duration) {
+    let deserialize_started = Instant::now();
+    let first_dim_query =
+        IPIRSimpleQuery::from_packed_bytes(packed_query_body, fixture.ypir.db_rows, fixture.rlwe.q)
+            .expect("packed query deserializes")
+            .as_slice()
+            .to_vec();
+    let deserialize_time = deserialize_started.elapsed();
+
+    let multiply_started = Instant::now();
+    let kernel = ChunkedSplitKernel::default();
+    let mut intermediate = vec![0u64; fixture.ypir.db_cols];
+    kernel.multiply_query(
+        fixture.rlwe,
+        &fixture.first_dim_db,
+        fixture.ypir.db_rows,
+        fixture.ypir.db_cols,
+        &first_dim_query,
+        &mut intermediate,
+    );
+    let multiply_time = multiply_started.elapsed();
+
+    let packing_started = Instant::now();
+    let packed = pack_intermediate_blocks(&intermediate, &fixture.preprocessed)
+        .expect("online pack succeeds");
+    black_box(&packed);
+    let packing_time = packing_started.elapsed();
+
+    let serialization_started = Instant::now();
+    black_box(serialize_rlwe_response(
+        packed_fixture,
+        fixture.ypir.q_prime_1,
+        fixture.ypir.q_prime_2,
+    ));
+    let serialization_time = serialization_started.elapsed();
+
+    (
+        deserialize_time,
+        multiply_time,
+        packing_time,
+        serialization_time,
+    )
 }
 
 fn bench_end_to_end(c: &mut Criterion) {
@@ -368,9 +453,14 @@ fn bench_end_to_end(c: &mut Criterion) {
         );
     let packed_fixture = pack_intermediate_blocks(&fixture.intermediate, &fixture.preprocessed)
         .expect("fixture online pack succeeds");
+    let upload_measurements = measure_uploads(&fixture);
+    let packed_query_body =
+        IPIRSimpleQuery::new(fixture.first_dim_query.clone()).to_packed_bytes(fixture.rlwe.q);
+    let (deserialize_once, multiply_once, packing_once, serialization_once) =
+        measure_server_breakdown_once(&fixture, &packed_query_body, &packed_fixture);
 
     eprintln!(
-        "ipir-sp target: profile={}, rows={}, item_bits={}, d={}, outputs={}, db_cols={}, serialized_ks_pair={} KiB, compressed_ks_pair={} KiB, cdks_upload={} KiB, response={} KiB, ||e_pack||_inf_bits={}, paper_noise_target_bits<={:.1}, cdks_online_target={} ms",
+        "ipir-sp target: profile={}, rows={}, item_bits={}, d={}, outputs={}, db_cols={}, serialized_ks_pair={} KiB, measured_key_pair={} KiB, measured_offline_query_polys={} KiB, measured_online_query_packed={} KiB, measured_online_query_legacy={} KiB, measured_fresh_query_upload={} KiB, cdks_upload={} KiB, response={} KiB, ||e_pack||_inf_bits={}, paper_noise_target_bits<={:.1}, cdks_online_target={} ms",
         fixture.name,
         fixture.ypir.db_rows,
         fixture.ypir.item_size_bits,
@@ -378,17 +468,49 @@ fn bench_end_to_end(c: &mut Criterion) {
         output_count,
         fixture.ypir.db_cols,
         serialized_ks_pair_len(fixture.rlwe) / 1024,
-        compressed_key_upload_bytes(fixture.rlwe) / 1024,
+        upload_measurements.key_pair_bytes / 1024,
+        upload_measurements.offline_query_polys_bytes / 1024,
+        upload_measurements.online_query_packed_bytes / 1024,
+        upload_measurements.online_query_legacy_bytes / 1024,
+        upload_measurements.fresh_query_total_bytes() / 1024,
         YPIR_CDKS_UPLOAD_KIB,
         response_bytes / 1024,
         fixture.noise_bits,
         INSPIRING_PAPER_NOISE_BITS,
         YPIR_CDKS_ONLINE_MS,
     );
+    eprintln!(
+        "ipir-sp measured_upload_bytes: key_pair={} offline_query_polys={} online_query_packed={} online_query_legacy={} fresh_query_total={} current_http_query={}",
+        upload_measurements.key_pair_bytes,
+        upload_measurements.offline_query_polys_bytes,
+        upload_measurements.online_query_packed_bytes,
+        upload_measurements.online_query_legacy_bytes,
+        upload_measurements.fresh_query_total_bytes(),
+        upload_measurements.online_query_packed_bytes,
+    );
+    eprintln!(
+        "ipir-sp one_shot_server_breakdown_us: deserialize={} matrix_vector={} packing={} serialization={}",
+        deserialize_once.as_micros(),
+        multiply_once.as_micros(),
+        packing_once.as_micros(),
+        serialization_once.as_micros(),
+    );
 
     let mut group = c.benchmark_group(fixture.name);
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function(BenchmarkId::new("online_deserialize_query_only", 1), |b| {
+        b.iter(|| {
+            let query = IPIRSimpleQuery::from_packed_bytes(
+                black_box(&packed_query_body),
+                fixture.ypir.db_rows,
+                fixture.rlwe.q,
+            )
+            .expect("packed query deserializes");
+            black_box(query);
+        });
+    });
 
     group.bench_function(
         BenchmarkId::new(
@@ -432,37 +554,42 @@ fn bench_end_to_end(c: &mut Criterion) {
         },
     );
 
-    group.bench_function(
-        BenchmarkId::new("offline_crs_extract_and_preprocess", output_count),
-        |b| {
-            b.iter_batched(
-                || {
-                    let (hint_0, _, messages) =
-                        encrypted_fixture_material(fixture.rlwe, &fixture.ypir, &fixture.secret);
-                    drop(messages);
-                    let mut rng = ChaCha20Rng::seed_from_u64(SEED);
-                    let key_pairs =
-                        generate_ks_pairs(fixture.rlwe, &fixture.secret, output_count, &mut rng);
-                    (hint_0, key_pairs)
-                },
-                |(hint_0, key_pairs)| {
-                    let offline = offline_precompute_from_hint(fixture.rlwe, &fixture.ypir, hint_0);
-                    let preprocessed_len = black_box(
-                        build_pack_preprocessed_blocks(
+    if std::env::var_os("IPIR_SP_SKIP_OFFLINE_BENCH").is_none() {
+        group.bench_function(
+            BenchmarkId::new("offline_crs_extract_and_preprocess", output_count),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let (hint_0, _, messages) = encrypted_fixture_material(
                             fixture.rlwe,
-                            &offline.crs_blocks,
-                            key_pairs,
-                        )
-                        .expect("benchmark preprocessing builds")
-                        .len(),
-                    );
-                    drop(offline);
-                    preprocessed_len
-                },
-                BatchSize::LargeInput,
-            );
-        },
-    );
+                            &fixture.ypir,
+                            &fixture.secret,
+                        );
+                        drop(messages);
+                        let mut rng = ChaCha20Rng::seed_from_u64(SEED);
+                        let key_pair = generate_ks_pair(fixture.rlwe, &fixture.secret, &mut rng);
+                        (hint_0, key_pair)
+                    },
+                    |(hint_0, key_pair)| {
+                        let offline =
+                            offline_precompute_from_hint(fixture.rlwe, &fixture.ypir, hint_0);
+                        let preprocessed_len = black_box(
+                            build_pack_preprocessed_blocks(
+                                fixture.rlwe,
+                                &offline.crs_blocks,
+                                &key_pair,
+                            )
+                            .expect("benchmark preprocessing builds")
+                            .len(),
+                        );
+                        drop(offline);
+                        preprocessed_len
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
 
     group.bench_function(BenchmarkId::new("online_pack_only", output_count), |b| {
         b.iter(|| {

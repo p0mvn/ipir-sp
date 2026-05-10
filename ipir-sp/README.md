@@ -35,9 +35,10 @@ client/server flow:
 
 - `IPIRClient::from_db_sz` derives the same SimplePIR scenario shape as YPIR.
 - `IPIRClient::generate_setup_simplepir` creates IPIR-SP setup material:
-  offline query polynomials plus `(K_g, K_h)` key-switching pairs.
+  offline query polynomials plus one per-query `(K_g, K_h)` key-switching pair.
 - `IPIRClient::generate_query_simplepir` returns an `IPIRSimpleQuery`; call
-  `query.to_bytes()` for the raw `/query` body.
+  `query.to_packed_bytes(rlwe.q)` for the compact `/query` body, or
+  `query.to_bytes()` for the legacy raw body.
 - `YServer::perform_full_online_computation_simplepir` parses those query bytes
   and returns serialized response bytes.
 - `IPIRClient::decode_response_simplepir` decodes the response with the returned
@@ -68,7 +69,7 @@ let (query, client_seed) = client.generate_query_simplepir(&setup, 0);
 let preprocessed = build_pack_preprocessed_blocks(
     &rlwe,
     &offline.crs_blocks,
-    setup.key_pairs,
+    &setup.key_pair,
 )?;
 
 let response = server.perform_full_online_computation_simplepir(

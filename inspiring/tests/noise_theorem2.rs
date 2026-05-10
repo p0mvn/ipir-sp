@@ -166,7 +166,7 @@ fn empirical_pack_noise_respects_theorem2_variance_bound() {
             &ntt_from_coeffs(&params, &s_tilde),
             &mut rng,
         );
-        let pre = PackPreprocessed::build(&params, &crs, kg, kh).expect("valid preprocessing");
+        let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
         let packed = pack(&batch, &pre).expect("pack succeeds");
 
         for noise in noise_coeffs(&params, &packed, &s_tilde, &messages) {

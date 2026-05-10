@@ -75,7 +75,7 @@ fn online_pack_matches_all_online_execution_for_same_crs() {
     let kg = zero_ks(&params);
     let kh = zero_ks(&params);
     let expected = all_online_pack(&params, &batch, &kg, &kh);
-    let pre = PackPreprocessed::build(&params, &crs, kg, kh).expect("valid preprocessing");
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
     let actual = pack(&batch, &pre).expect("pack succeeds").inner;
 
@@ -89,8 +89,7 @@ fn online_pack_matches_all_online_execution_for_multiple_b_vectors() {
     let crs = crs_from_batch(&params, &crs_batch);
     let kg = zero_ks(&params);
     let kh = zero_ks(&params);
-    let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-        .expect("valid preprocessing");
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
     for b_seed in [0, 1, 37, params.q - 9] {
         let mut query_batch = batch(&params, b_seed);

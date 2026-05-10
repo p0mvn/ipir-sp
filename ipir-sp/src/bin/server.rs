@@ -86,7 +86,7 @@ async fn main() -> std::io::Result<()> {
     let offline = server
         .perform_offline_precomputation_simplepir(client.rlwe_params(), &setup.offline_query_polys);
     let preprocessed =
-        build_pack_preprocessed_blocks(client.rlwe_params(), &offline.crs_blocks, setup.key_pairs)
+        build_pack_preprocessed_blocks(client.rlwe_params(), &offline.crs_blocks, &setup.key_pair)
             .expect("preprocessing builds");
 
     let app_data = web::Data::new(ServerState {

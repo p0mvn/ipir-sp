@@ -5,17 +5,52 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ipir_sp::client::IPIRClient;
+use ipir_sp::serialize::{serialize_ks_pair, serialize_u64s_le};
 use nullifier_pir::backend::{Backend, BackendKind, PirBackend};
 use nullifier_pir::encoding::{decode_item_coefficients, extract_nullifier, nullifier_offset};
-use nullifier_pir::http::SERVER_TIME_HEADER;
+use nullifier_pir::http::{
+    SERVER_DESERIALIZE_TIME_HEADER, SERVER_MATRIX_VECTOR_TIME_HEADER, SERVER_PACKING_TIME_HEADER,
+    SERVER_SERIALIZATION_TIME_HEADER, SERVER_TIME_HEADER,
+};
 use nullifier_pir::snapshot::{
     download_snapshot, sha256_file, write_metadata, NullifierSnapshot, SnapshotMetadata,
     DEFAULT_SNAPSHOT_URL,
 };
 use nullifier_pir::ITEM_SIZE_BITS;
+#[cfg(feature = "ypir-artifact")]
+use ypir::serialize::ToBytes as YpirToBytes;
 
 const META_ENDPOINT: &str = "/meta";
 const QUERY_ENDPOINT: &str = "/query";
+
+#[derive(Debug, Clone)]
+struct UploadBreakdown {
+    backend: &'static str,
+    components: Vec<(&'static str, usize)>,
+}
+
+impl UploadBreakdown {
+    fn total(&self) -> usize {
+        self.components.iter().map(|(_, bytes)| *bytes).sum()
+    }
+
+    fn format_components(&self) -> String {
+        self.components
+            .iter()
+            .map(|(name, bytes)| format!("{name}={bytes}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ServerTimingBreakdown {
+    total_us: Option<u128>,
+    deserialize_us: Option<u128>,
+    matrix_vector_us: Option<u128>,
+    packing_us: Option<u128>,
+    serialization_us: Option<u128>,
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -216,6 +251,9 @@ fn query_row(
     let setup_seed_from_server = meta["backend"]["setup_seed"]
         .as_u64()
         .context("missing backend.setup_seed in /meta")?;
+    let backend_kind = meta["backend"]["backend"]
+        .as_str()
+        .context("missing backend.backend in /meta")?;
     if setup_seed_from_server != setup_seed {
         anyhow::bail!(
             "setup seed mismatch: server reports {}, client used {}",
@@ -224,36 +262,83 @@ fn query_row(
         );
     }
 
-    let pir_client = IPIRClient::from_db_sz(pir_item_count, ITEM_SIZE_BITS);
     let query_started = Instant::now();
     let query_gen_started = Instant::now();
-    let query_setup = pir_client.generate_query_setup_simplepir_from_seed(
-        nullifier_pir::backend::seed_from_u64(setup_seed),
-    );
-    let (query, client_seed) =
-        pir_client.generate_query_simplepir_from_query_setup(&query_setup, row);
-    let query_gen_time = query_gen_started.elapsed();
     let query_url = format!("{}{}", server_url.trim_end_matches('/'), QUERY_ENDPOINT);
-    let post_started = Instant::now();
-    let response = client
-        .post(&query_url)
-        .body(query.to_bytes())
-        .send()
-        .with_context(|| format!("POST {query_url}"))?
-        .error_for_status()?;
-    let post_round_trip = post_started.elapsed();
-    let server_time_us = response
-        .headers()
-        .get(SERVER_TIME_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u128>().ok());
-    let response = response
-        .bytes()
-        .with_context(|| format!("read {query_url} response"))?;
+
+    let (query_body, upload_breakdown, decoder): (
+        Vec<u8>,
+        UploadBreakdown,
+        Box<dyn FnOnce(&[u8]) -> Vec<u8>>,
+    ) = if backend_kind == "ypir-artifact" {
+        #[cfg(feature = "ypir-artifact")]
+        {
+            let ypir_client = ypir::client::YPIRClient::from_db_sz(pir_item_count, ITEM_SIZE_BITS);
+            let (query, client_seed) = ypir_client.generate_query_simplepir(row);
+            let simplepir_query_bytes = query.0.as_slice().len() * std::mem::size_of::<u64>();
+            let pack_pub_params_bytes = query.1.as_slice().len() * std::mem::size_of::<u64>();
+            let query_body = YpirToBytes::to_bytes(&query);
+            (
+                query_body,
+                UploadBreakdown {
+                    backend: "ypir-artifact",
+                    components: vec![
+                        ("simplepir_query", simplepir_query_bytes),
+                        ("pack_pub_params", pack_pub_params_bytes),
+                    ],
+                },
+                Box::new(move |response| {
+                    ypir_client.decode_response_simplepir(client_seed, response)
+                }),
+            )
+        }
+        #[cfg(not(feature = "ypir-artifact"))]
+        {
+            anyhow::bail!("server uses ypir-artifact, but client was built without that feature");
+        }
+    } else {
+        let pir_client = IPIRClient::from_db_sz(pir_item_count, ITEM_SIZE_BITS);
+        let setup = pir_client
+            .generate_setup_simplepir_from_seed(nullifier_pir::backend::seed_from_u64(setup_seed));
+        let key_pair_bytes = serialize_ks_pair(
+            pir_client.rlwe_params(),
+            &setup.key_pair.0,
+            &setup.key_pair.1,
+        )
+        .context("serialize local ipir key-switching pair for upload accounting")?
+        .len();
+        let offline_query_polys_bytes = setup
+            .offline_query_polys
+            .iter()
+            .map(|poly| serialize_u64s_le(poly).len())
+            .sum();
+        let (query, client_seed) = pir_client.generate_query_simplepir(&setup, row);
+        let online_query_packed = query.to_packed_bytes(pir_client.rlwe_params().q);
+        let online_query_packed_bytes = online_query_packed.len();
+        (
+            online_query_packed,
+            UploadBreakdown {
+                backend: "local-ipir",
+                components: vec![
+                    ("key_pair", key_pair_bytes),
+                    ("offline_query_polys", offline_query_polys_bytes),
+                    ("online_query", online_query_packed_bytes),
+                ],
+            },
+            Box::new(move |response| {
+                let decoded_coeffs =
+                    pir_client.decode_response_simplepir_raw(client_seed, response);
+                decode_item_coefficients(&decoded_coeffs)
+            }),
+        )
+    };
+    let query_gen_time = query_gen_started.elapsed();
+
+    let (response, post_round_trip, server_timing, upload_bytes, download_bytes) =
+        post_query(&client, &query_url, query_body)?;
 
     let decode_started = Instant::now();
-    let decoded_coeffs = pir_client.decode_response_simplepir_raw(client_seed, &response);
-    let row_bytes = decode_item_coefficients(&decoded_coeffs);
+    let row_bytes = decoder(&response);
     let decode_time = decode_started.elapsed();
     if let Some(offset) = expected_offset {
         let returned = extract_nullifier(&row_bytes, offset)
@@ -274,12 +359,81 @@ fn query_row(
         query_started.elapsed().as_micros(),
         query_gen_time.as_micros(),
         post_round_trip.as_micros(),
-        server_time_us
+        server_timing
+            .total_us
             .map(|value| value.to_string())
             .unwrap_or_else(|| "missing".to_string()),
         decode_time.as_micros()
     );
+    println!(
+        "server_breakdown_us deserialize={} matrix_vector={} packing={} serialization={}",
+        format_optional_us(server_timing.deserialize_us),
+        format_optional_us(server_timing.matrix_vector_us),
+        format_optional_us(server_timing.packing_us),
+        format_optional_us(server_timing.serialization_us),
+    );
+    println!("wire_bytes upload={upload_bytes} download={download_bytes}");
+    println!(
+        "upload_breakdown backend={} total={} {}",
+        upload_breakdown.backend,
+        upload_breakdown.total(),
+        upload_breakdown.format_components()
+    );
     Ok(row_bytes)
+}
+
+fn format_optional_us(value: Option<u128>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "missing".to_string())
+}
+
+fn post_query(
+    client: &reqwest::blocking::Client,
+    query_url: &str,
+    query_body: Vec<u8>,
+) -> Result<(
+    Vec<u8>,
+    std::time::Duration,
+    ServerTimingBreakdown,
+    usize,
+    usize,
+)> {
+    let upload_bytes = query_body.len();
+    let post_started = Instant::now();
+    let response = client
+        .post(query_url)
+        .body(query_body)
+        .send()
+        .with_context(|| format!("POST {query_url}"))?
+        .error_for_status()?;
+    let post_round_trip = post_started.elapsed();
+    let headers = response.headers();
+    let server_timing = ServerTimingBreakdown {
+        total_us: parse_header_us(headers, SERVER_TIME_HEADER),
+        deserialize_us: parse_header_us(headers, SERVER_DESERIALIZE_TIME_HEADER),
+        matrix_vector_us: parse_header_us(headers, SERVER_MATRIX_VECTOR_TIME_HEADER),
+        packing_us: parse_header_us(headers, SERVER_PACKING_TIME_HEADER),
+        serialization_us: parse_header_us(headers, SERVER_SERIALIZATION_TIME_HEADER),
+    };
+    let response = response
+        .bytes()
+        .with_context(|| format!("read {query_url} response"))?;
+    let download_bytes = response.len();
+    Ok((
+        response.to_vec(),
+        post_round_trip,
+        server_timing,
+        upload_bytes,
+        download_bytes,
+    ))
+}
+
+fn parse_header_us(headers: &reqwest::header::HeaderMap, name: &'static str) -> Option<u128> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u128>().ok())
 }
 
 fn row_contains_nullifier(row: &[u8], target: &[u8; nullifier_pir::NULLIFIER_BYTES]) -> bool {

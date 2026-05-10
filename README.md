@@ -94,8 +94,8 @@ For a single SimplePIR query:
 
 1. **Params.** `ipir_sp::params_for_simplepir(num_items, item_size_bits)` returns
    an `inspiring::RlweParams` plus YPIR transport and database dimensions.
-2. **Client setup.** Sample a ternary RLWE secret and generate one `(K_g, K_h)`
-   pair per RLWE output block via `client::generate_ks_pairs`.
+2. **Client setup.** Sample a ternary RLWE secret and generate one per-query
+   `(K_g, K_h)` pair via `client::generate_ks_pair`.
 3. **Server offline.** `YServer::perform_offline_precomputation_simplepir`
    computes `hint_0`, splits it into CRS blocks, and builds an
    `inspiring::PackPreprocessed` cache for each block.

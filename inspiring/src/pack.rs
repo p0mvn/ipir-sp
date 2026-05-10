@@ -118,8 +118,9 @@ mod tests {
     fn pack_uses_preprocessed_a_and_online_b_values() {
         let params = params();
         let crs = crs(&params);
-        let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-            .expect("valid preprocessing");
+        let kg = zero_ks(&params);
+        let kh = zero_ks(&params);
+        let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
         let b_values: Vec<_> = (0..params.d).map(|idx| idx as u64 + 10).collect();
         let left = batch(&params, &b_values, 1);
         let right = batch(&params, &b_values, 999);
@@ -139,8 +140,9 @@ mod tests {
     fn pack_runs_no_online_key_switch_products() {
         let params = params();
         let crs = crs(&params);
-        let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
-            .expect("valid preprocessing");
+        let kg = zero_ks(&params);
+        let kh = zero_ks(&params);
+        let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
         let b_values: Vec<_> = (0..params.d).map(|idx| idx as u64).collect();
         let batch = batch(&params, &b_values, 0);
 

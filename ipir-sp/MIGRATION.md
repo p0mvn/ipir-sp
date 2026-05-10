@@ -7,9 +7,10 @@ LWE-to-RLWE packing boundary changes.
 ## Main Conceptual Changes
 
 YPIR's original packing path uploads `log d` expansion matrices and performs a
-CDKS-style recursive packing. `ipir-sp` uploads exactly two InspiRING
-key-switching matrices per preprocessing block, `K_g` and `K_h`, then calls
-`inspiring::pack` once per RLWE output block.
+CDKS-style recursive packing. For each fresh query/setup, `ipir-sp` uploads
+exactly two InspiRING key-switching matrices total, `K_g` and `K_h`, shares them
+across preprocessing blocks, then calls `inspiring::pack` once per RLWE output
+block.
 
 The RLWE side is single-CRT throughout. Response transport still uses YPIR-style
 reduced moduli, but `modulus_switch` performs row-wise switching from one
@@ -27,15 +28,14 @@ For a client facade similar to YPIR's `YPIRClient`, use
 
 `raw_generate_expansion_params`
 
-Use `ipir_sp::client::generate_ks_pair` for one `(K_g, K_h)` pair or
-`ipir_sp::client::generate_ks_pairs` when building several preprocessing
-blocks. The uploaded key material is serialized with
+Use `ipir_sp::client::generate_ks_pair` for the single per-query `(K_g, K_h)`
+pair shared across all preprocessing blocks. The uploaded key material is serialized with
 `ipir_sp::serialize::serialize_ks_pair` and parsed with
 `ipir_sp::serialize::deserialize_ks_pair`.
 
 For the high-level path, call `IPIRClient::generate_setup_simplepir` or
 `IPIRClient::generate_setup_simplepir_from_seed`. The returned
-`IPIRSimpleSetup` contains the offline query polynomials and key-switching pairs
+`IPIRSimpleSetup` contains the offline query polynomials and key-switching pair
 needed by the server precompute step.
 
 `pack_pub_params`

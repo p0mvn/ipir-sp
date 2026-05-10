@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (query, client_seed) = client.generate_query_simplepir(&setup, args.target_row);
     let response = reqwest::blocking::Client::new()
         .post(format!("http://127.0.0.1:{}/query", args.port))
-        .body(query.to_bytes())
+        .body(query.to_packed_bytes(client.rlwe_params().q))
         .send()?
         .error_for_status()?
         .bytes()?;

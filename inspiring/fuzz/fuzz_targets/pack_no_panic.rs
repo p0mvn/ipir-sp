@@ -39,7 +39,9 @@ fuzz_target!(|data: &[u8]| {
     )
     .expect("valid fuzz params");
     let crs = crs(&params);
-    let pre = PackPreprocessed::build(&params, &crs, zero_ks(&params), zero_ks(&params))
+    let kg = zero_ks(&params);
+    let kh = zero_ks(&params);
+    let pre = PackPreprocessed::build(&params, &crs, &kg, &kh)
         .expect("valid fuzz preprocessing");
     let batch = LweBatch {
         inner: (0..params.d)

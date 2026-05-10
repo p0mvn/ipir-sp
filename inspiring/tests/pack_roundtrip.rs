@@ -140,7 +140,7 @@ fn pack_roundtrip_recovers_all_message_slots_for_many_seeds() {
             &ntt_from_coeffs(&params, &s_tilde),
             &mut rng,
         );
-        let pre = PackPreprocessed::build(&params, &crs, kg, kh).expect("valid preprocessing");
+        let pre = PackPreprocessed::build(&params, &crs, &kg, &kh).expect("valid preprocessing");
 
         let packed = pack(&batch, &pre).expect("pack succeeds");
 

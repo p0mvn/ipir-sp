@@ -223,7 +223,7 @@ fn build_chunk<'a>(
         &ntt_from_coeffs(params, s_tilde),
         &mut rng,
     );
-    let pre = PackPreprocessed::build(params, &crs, kg, kh).expect("valid preprocessing");
+    let pre = PackPreprocessed::build(params, &crs, &kg, &kh).expect("valid preprocessing");
 
     ChunkFixture {
         batch,

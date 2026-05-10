@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 use crate::encoding::ITEM_SIZE_BITS;
 use crate::snapshot::NullifierSnapshot;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServerBreakdown {
+    pub deserialize_us: u128,
+    pub matrix_vector_us: u128,
+    pub packing_us: u128,
+    pub serialization_us: u128,
+}
+
+pub struct QueryAnswer {
+    pub body: Vec<u8>,
+    pub breakdown: ServerBreakdown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendKind {
@@ -30,7 +43,7 @@ pub struct BackendMetadata {
 
 pub trait PirBackend: Send + Sync {
     fn meta(&self) -> BackendMetadata;
-    fn answer_query(&self, query: &[u8]) -> Result<Vec<u8>>;
+    fn answer_query(&self, query: &[u8]) -> Result<QueryAnswer>;
 }
 
 pub fn seed_from_u64(value: u64) -> [u8; 32] {
@@ -76,7 +89,7 @@ impl LocalIpirBackend {
         let preprocessed = build_pack_preprocessed_blocks(
             client.rlwe_params(),
             &offline.crs_blocks,
-            setup.key_pairs,
+            &setup.key_pair,
         )
         .context("build local ipir-sp preprocessing")?;
 
@@ -105,10 +118,24 @@ impl PirBackend for LocalIpirBackend {
         }
     }
 
-    fn answer_query(&self, query: &[u8]) -> Result<Vec<u8>> {
-        self.server
-            .perform_full_online_computation_simplepir(self.rlwe, query, &self.preprocessed)
-            .context("local ipir-sp query failed")
+    fn answer_query(&self, query: &[u8]) -> Result<QueryAnswer> {
+        let (body, timing) = self
+            .server
+            .perform_full_online_computation_simplepir_measured(
+                self.rlwe,
+                query,
+                &self.preprocessed,
+            )
+            .context("local ipir-sp query failed")?;
+        Ok(QueryAnswer {
+            body,
+            breakdown: ServerBreakdown {
+                deserialize_us: timing.deserialize.as_micros(),
+                matrix_vector_us: timing.matrix_vector.as_micros(),
+                packing_us: timing.packing.as_micros(),
+                serialization_us: timing.serialization.as_micros(),
+            },
+        })
     }
 }
 
@@ -155,7 +182,7 @@ impl PirBackend for Backend {
         }
     }
 
-    fn answer_query(&self, query: &[u8]) -> Result<Vec<u8>> {
+    fn answer_query(&self, query: &[u8]) -> Result<QueryAnswer> {
         match self {
             Self::Local(backend) => backend.answer_query(query),
             #[cfg(feature = "ypir-artifact")]
@@ -169,7 +196,7 @@ mod ypir_artifact {
     use super::*;
     use std::sync::Mutex;
     use ypir::params::{params_for_scenario_simplepir, DbRowsCols};
-    use ypir::serialize::OfflinePrecomputedValues;
+    use ypir::serialize::{FromBytes, OfflinePrecomputedValues};
     use ypir::server::YServer;
 
     pub struct YpirArtifactBackend {
@@ -217,14 +244,57 @@ mod ypir_artifact {
             }
         }
 
-        fn answer_query(&self, query: &[u8]) -> Result<Vec<u8>> {
+        fn answer_query(&self, query: &[u8]) -> Result<QueryAnswer> {
+            let first_dim_bytes_sz = self.params.db_rows() * std::mem::size_of::<u64>();
+            let pub_param_bytes_sz = self.params.poly_len_log2
+                * self.params.t_exp_left
+                * self.params.poly_len
+                * std::mem::size_of::<u64>();
+            if query.len() != first_dim_bytes_sz + pub_param_bytes_sz {
+                anyhow::bail!(
+                    "YPIR query must be {} bytes, got {}",
+                    first_dim_bytes_sz + pub_param_bytes_sz,
+                    query.len()
+                );
+            }
+
+            let deserialize_started = std::time::Instant::now();
+            let first_dim = ypir_spiral::aligned_memory::AlignedMemory64::from_bytes(
+                &query[..first_dim_bytes_sz],
+            );
+            let pub_params = ypir_spiral::aligned_memory::AlignedMemory64::from_bytes(
+                &query[first_dim_bytes_sz..],
+            );
+            let deserialize_us = deserialize_started.elapsed().as_micros();
+
             let offline = self
                 .offline
                 .lock()
                 .map_err(|_| anyhow::anyhow!("YPIR offline cache mutex poisoned"))?;
-            Ok(self
-                .server
-                .perform_full_online_computation_simplepir(&offline, query))
+            let mut measurement = ypir::measurement::Measurement::default();
+            let server_started = std::time::Instant::now();
+            let body = self.server.perform_online_computation_simplepir(
+                first_dim.as_slice(),
+                &offline,
+                &[pub_params.as_slice()],
+                Some(&mut measurement),
+            );
+            let server_us = server_started.elapsed().as_micros();
+            let matrix_vector_us = measurement.online.first_pass_time_ms as u128 * 1_000;
+            let packing_us = measurement.online.ring_packing_time_ms as u128 * 1_000;
+            let serialization_us = server_us
+                .saturating_sub(matrix_vector_us)
+                .saturating_sub(packing_us);
+
+            Ok(QueryAnswer {
+                body,
+                breakdown: ServerBreakdown {
+                    deserialize_us,
+                    matrix_vector_us,
+                    packing_us,
+                    serialization_us,
+                },
+            })
         }
     }
 }

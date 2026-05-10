@@ -1,6 +1,6 @@
 use inspiring::key_switching::ks_call_count;
 use inspiring::{GadgetParams, RlweParams};
-use ipir_sp::client::{generate_ks_pairs, ClientSecret, IPIRClient};
+use ipir_sp::client::{generate_ks_pair, ClientSecret, IPIRClient};
 use ipir_sp::modulus_switch::{recover_rlwe_rows, switched_rlwe_response_len};
 use ipir_sp::server::{build_pack_preprocessed_blocks, offline_precompute_from_hint, YServer};
 use ipir_sp::YpirSchemeParams;
@@ -140,8 +140,8 @@ fn client_keys_drive_server_online_response_serialization() {
     let mut rng = ChaCha20Rng::seed_from_u64(0x5150);
     let hint_0 = vec![0u64; rlwe.d * ypir.db_cols];
     let offline = offline_precompute_from_hint(&rlwe, &ypir, hint_0);
-    let key_pairs = generate_ks_pairs(&rlwe, &secret, offline.crs_blocks.len(), &mut rng);
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)
+    let key_pair = generate_ks_pair(&rlwe, &secret, &mut rng);
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &key_pair)
         .expect("preprocessing builds with generated keys");
 
     let query = [1, 0, 0, 0];
@@ -181,10 +181,10 @@ fn online_response_uses_precomputed_switches_per_rlwe_output() {
     let mut rng = ChaCha20Rng::seed_from_u64(0x5151);
     let hint_0 = vec![0u64; rlwe.d * ypir.db_cols];
     let offline = offline_precompute_from_hint(&rlwe, &ypir, hint_0);
-    let key_pairs = generate_ks_pairs(&rlwe, &secret, offline.crs_blocks.len(), &mut rng);
+    let key_pair = generate_ks_pair(&rlwe, &secret, &mut rng);
 
     ks_call_count::reset();
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &key_pair)
         .expect("preprocessing builds with generated keys");
     assert_eq!(
         ks_call_count::get(),
@@ -222,8 +222,8 @@ fn generated_offline_hint_feeds_preprocessing_and_online_response() {
 
     let secret = ClientSecret::from_coeffs(&rlwe, vec![1, 0, rlwe.q - 1, 1, 0, 1, 0, 0]);
     let mut rng = ChaCha20Rng::seed_from_u64(0x5152);
-    let key_pairs = generate_ks_pairs(&rlwe, &secret, offline.crs_blocks.len(), &mut rng);
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)
+    let key_pair = generate_ks_pair(&rlwe, &secret, &mut rng);
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &key_pair)
         .expect("preprocessing builds with generated hints");
 
     let query = [1, 0, 0, 0, 0, 0, 0, 0];
@@ -260,8 +260,8 @@ fn mocked_db_query_decodes_exact_expected_row_bytes() {
     let offline_query = vec![vec![1, 0, 0, 0, 0, 0, 0, 0]];
     let offline = server.perform_offline_precomputation_simplepir(&rlwe, &offline_query);
     let mut rng = ChaCha20Rng::seed_from_u64(0xE2E);
-    let key_pairs = generate_ks_pairs(&rlwe, &zero_secret, offline.crs_blocks.len(), &mut rng);
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)
+    let key_pair = generate_ks_pair(&rlwe, &zero_secret, &mut rng);
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &key_pair)
         .expect("preprocessing builds");
 
     let target_row = 3;
@@ -306,8 +306,8 @@ fn encrypted_pir_query_decodes_exact_expected_row_bytes() {
     let offline_query = vec![vec![2, 1, 0, 3, 1, 0, 2, 1]];
     let offline = server.perform_offline_precomputation_simplepir(&rlwe, &offline_query);
     let mut rng = ChaCha20Rng::seed_from_u64(0xE2E1);
-    let key_pairs = generate_ks_pairs(&rlwe, &secret, offline.crs_blocks.len(), &mut rng);
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, key_pairs)
+    let key_pair = generate_ks_pair(&rlwe, &secret, &mut rng);
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &key_pair)
         .expect("preprocessing builds");
 
     let target_row = 5;
@@ -352,11 +352,11 @@ fn ipir_client_facade_matches_server_full_online_shape() {
     let offline =
         server.perform_offline_precomputation_simplepir(&rlwe, &setup.offline_query_polys);
     let (query, client_seed) = client.generate_query_simplepir(&setup, 6);
-    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, setup.key_pairs)
+    let pre = build_pack_preprocessed_blocks(&rlwe, &offline.crs_blocks, &setup.key_pair)
         .expect("preprocessing builds from facade setup");
 
     let response = server
-        .perform_full_online_computation_simplepir(&rlwe, &query.to_bytes(), &pre)
+        .perform_full_online_computation_simplepir(&rlwe, &query.to_packed_bytes(rlwe.q), &pre)
         .expect("full online response");
     let decoded = client.decode_response_simplepir_raw(client_seed, &response);
     let expected = db_values[6 * ypir.db_cols..7 * ypir.db_cols].to_vec();
